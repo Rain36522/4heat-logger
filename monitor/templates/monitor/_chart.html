@@ -1,0 +1,39 @@
+{% comment %}
+Draws `figure` (a Plotly.js spec from monitor.core.charts). Colour tokens such as "$series-1"
+are replaced by the CSS custom properties of base.html, and the chart is redrawn when the
+system switches between light and dark mode. ({# #} only works on a single line.)
+{% endcomment %}
+<div id="chart" class="chart {{ chart_class }}" role="img" aria-label="{{ chart_label }}"></div>
+{{ figure|json_script:"figure-spec" }}
+<script src="{% url 'plotly_js' %}"></script>
+<script>
+(function () {
+  var spec = JSON.parse(document.getElementById("figure-spec").textContent);
+  var root = document.documentElement;
+
+  function resolve(node) {
+    if (typeof node === "string") {
+      if (node.charAt(0) === "$") {
+        var value = getComputedStyle(root).getPropertyValue("--" + node.slice(1)).trim();
+        return value || node;
+      }
+      return node;
+    }
+    if (Array.isArray(node)) { return node.map(resolve); }
+    if (node && typeof node === "object") {
+      var out = {};
+      Object.keys(node).forEach(function (key) { out[key] = resolve(node[key]); });
+      return out;
+    }
+    return node;
+  }
+
+  function draw() {
+    var themed = resolve(spec);
+    Plotly.react("chart", themed.data, themed.layout, themed.config);
+  }
+
+  draw();
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
+})();
+</script>

@@ -1,0 +1,133 @@
+{% extends "monitor/base.html" %}
+{% block title %}Statut – Chauffage{% endblock %}
+{% block content %}
+<h1>Statut</h1>
+
+{% if not has_data %}
+  <div class="card">
+    <p><strong>Aucune mesure trouvée.</strong></p>
+    <p class="muted">Le fichier CSV du collecteur est introuvable ou vide. Vérifie la variable <code>HEATING_CSV_PATH</code> (ou le dossier monté dans <code>/data</code> avec Docker).</p>
+  </div>
+{% else %}
+  <div class="card" data-live="summary">
+    <div class="badge">
+      <span class="dot {% if live %}good{% else %}idle{% endif %}"></span>
+      {% if live %}En marche{% else %}Pas de données récentes{% endif %}
+    </div>
+    <p class="muted" style="margin:6px 0 0">
+      Dernière mesure : {{ last_stamp|date:"d.m.Y H:i:s" }} (il y a {{ age_text }})
+    </p>
+    {% if not live %}
+      <p class="muted" style="margin:6px 0 0">
+        Le collecteur n'écrit que lorsque le module répond. Cette page ne peut donc pas distinguer « chauffage éteint » de « collecteur arrêté ».
+      </p>
+    {% endif %}
+    <p style="margin:12px 0 0">
+      État : <strong>{{ state|default_if_none:"–" }}</strong>{% if state_name %} ({{ state_name }}){% endif %}
+      &nbsp;·&nbsp;
+      Défaut :
+      {% if error %}
+        <span class="tag">code {{ error }}{% if error_name %} – {{ error_name }}{% endif %}</span>
+      {% else %}
+        <strong>{{ error|default_if_none:"–" }}</strong>
+      {% endif %}
+    </p>
+  </div>
+
+  <div class="grid" data-live="metrics">
+    {% for metric in metrics %}
+      <div class="card metric">
+        <div class="label">{{ metric.label }}</div>
+        <div><span class="value">{{ metric.value }}</span><span class="unit">{{ metric.unit }}</span></div>
+      </div>
+    {% endfor %}
+    <div class="card metric">
+      <div class="label">Défauts (7 derniers jours)</div>
+      <div><span class="value">{{ week_defect_count }}</span></div>
+    </div>
+  </div>
+
+  <h2>Dernières 3 heures</h2>
+  <div class="card">
+    {% include "monitor/_chart.html" with chart_class="short" %}
+  </div>
+
+  <div data-live="defects">
+  {% if last_defects %}
+    <h2>Derniers défauts</h2>
+    <div class="table-wrap card" style="padding:0">
+      <table>
+        <thead><tr><th>Début</th><th>Code</th><th>Durée</th><th>Après démarrage</th></tr></thead>
+        <tbody>
+          {% for episode in last_defects %}
+            <tr>
+              <td>{{ episode.start|date:"d.m H:i" }}</td>
+              <td>{{ episode.code }}</td>
+              <td>{{ episode.duration_min|floatformat:0 }} min</td>
+              <td>{% if episode.minutes_since_startup is None %}–{% else %}{{ episode.minutes_since_startup|floatformat:0 }} min{% endif %}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+  </div>
+
+  <h2>Dernières mesures</h2>
+  <div class="table-wrap card" style="padding:0" data-live="recent">
+    <table>
+      <thead><tr><th>Heure</th><th>État</th><th>Défaut</th><th>Chaudière</th><th>Consigne</th><th>Fumées</th><th>O₂</th></tr></thead>
+      <tbody>
+        {% for row in recent_rows %}
+          <tr>
+            <td>{{ row.time|date:"d.m H:i:s" }}</td><td>{{ row.state }}</td><td>{{ row.error }}</td>
+            <td>{{ row.boiler }} °C</td><td>{{ row.target }} °C</td><td>{{ row.exhaust }} °C</td><td>{{ row.oxygen }} %</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endif %}
+
+<h2>Derniers changements de réglages</h2>
+<div class="table-wrap card" style="padding:0" data-live="changes">
+  <table>
+    <thead><tr><th>Date</th><th>Paramètre</th><th>Ancien</th><th>Nouveau</th></tr></thead>
+    <tbody>
+      {% for change in recent_changes %}
+        <tr>
+          <td>{{ change.timestamp|date:"d.m H:i" }}{% if change.time_is_approximate %} ≈{% endif %}</td>
+          <td>{{ change.parameter.code }}</td>
+          <td>{{ change.old_value|default:"–" }}</td>
+          <td>{{ change.new_value }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="4" class="muted">Aucun changement enregistré.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p><a href="{% url 'journal' %}">Enregistrer un changement →</a></p>
+
+<script>
+  // Every 30 s, fetch this page again and swap only the [data-live] blocks:
+  // the chart is left alone, so a zoom on it is kept.
+  setInterval(async () => {
+    if (document.hidden) { return; }
+    try {
+      const response = await fetch(location.href, { cache: "no-store" });
+      if (!response.ok) { return; }
+      const fresh = new DOMParser().parseFromString(await response.text(), "text/html");
+      const current = document.querySelectorAll("[data-live]");
+      const next = fresh.querySelectorAll("[data-live]");
+      if (current.length !== next.length) {
+        location.reload();  // data appeared or vanished, or the session expired: show the full page
+        return;
+      }
+      current.forEach((block, i) => { block.innerHTML = next[i].innerHTML; });
+    } catch (error) {
+      // Network hiccup: keep the current figures and try again next time.
+    }
+  }, 30000);
+</script>
+{% endblock %}

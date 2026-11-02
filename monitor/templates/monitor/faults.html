@@ -1,0 +1,45 @@
+{% extends "monitor/base.html" %}
+{% block title %}Défauts – Chauffage{% endblock %}
+{% block content %}
+<h1>Défauts</h1>
+{% include "monitor/_filters.html" %}
+<p class="muted">Tout code de défaut ≠ 0 est compté. {{ total }} épisode{{ total|pluralize }} sur la période.</p>
+
+<h2>Résumé par code</h2>
+<div class="table-wrap card" style="padding:0">
+  <table>
+    <thead><tr><th>Code</th><th>Nom</th><th>Épisodes</th><th>Durée médiane</th><th>Médiane après démarrage</th></tr></thead>
+    <tbody>
+      {% for item in summary %}
+        <tr>
+          <td>{{ item.code }}</td><td>{{ item.name|default:"–" }}</td><td>{{ item.count }}</td>
+          <td>{{ item.median_duration|floatformat:0 }} min</td>
+          <td>{% if item.median_after_startup is None %}–{% else %}{{ item.median_after_startup|floatformat:0 }} min{% endif %}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" class="muted">Aucun défaut sur la période.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h2>Détail</h2>
+<div class="table-wrap card" style="padding:0">
+  <table>
+    <thead><tr><th>Début</th><th>Code</th><th>État</th><th>Durée</th><th>Après démarrage</th></tr></thead>
+    <tbody>
+      {% for row in rows %}
+        <tr>
+          <td>{{ row.episode.start|date:"d.m.Y H:i" }}</td>
+          <td>{{ row.episode.code }}{% if row.error_name %} – {{ row.error_name }}{% endif %}</td>
+          <td>{{ row.episode.state|default_if_none:"–" }}{% if row.state_name %} ({{ row.state_name }}){% endif %}</td>
+          <td>{{ row.episode.duration_min|floatformat:0 }} min</td>
+          <td>{% if row.episode.minutes_since_startup is None %}–{% else %}{{ row.episode.minutes_since_startup|floatformat:0 }} min{% endif %}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" class="muted">–</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,13 @@
+{% extends "monitor/base.html" %}
+{% block title %}Connexion – Chauffage{% endblock %}
+{% block content %}
+<h1>Connexion</h1>
+<form method="post" class="card" style="max-width:400px">
+  {% csrf_token %}
+  {% if form.errors %}<ul class="errorlist"><li>Identifiants incorrects.</li></ul>{% endif %}
+  <div class="field"><label for="{{ form.username.id_for_label }}">Utilisateur</label>{{ form.username }}</div>
+  <div class="field"><label for="{{ form.password.id_for_label }}">Mot de passe</label>{{ form.password }}</div>
+  <input type="hidden" name="next" value="{{ next }}">
+  <button class="primary" type="submit">Se connecter</button>
+</form>
+{% endblock %}

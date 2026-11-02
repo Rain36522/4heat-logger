@@ -1,0 +1,50 @@
+{% extends "monitor/base.html" %}
+{% block title %}Graphes – Chauffage{% endblock %}
+{% block content %}
+<h1>Graphes</h1>
+{% include "monitor/_filters.html" %}
+
+{% if readings_count == 0 %}
+  <div class="card"><p class="muted">Aucune mesure sur cette période (le collecteur n'écrit que quand le chauffage répond).</p></div>
+{% endif %}
+<div class="card">
+  {% include "monitor/_chart.html" %}
+</div>
+<p class="muted">Bandes rouges : défauts (code ≠ 0). Traits verticaux : changements de réglages. Les trous de plus de 5 min ne sont pas reliés.</p>
+
+<h2>Défauts sur la période</h2>
+<div class="table-wrap card" style="padding:0">
+  <table>
+    <thead><tr><th>Début</th><th>Code</th><th>Durée</th><th>Après démarrage</th></tr></thead>
+    <tbody>
+      {% for episode in episodes %}
+        <tr>
+          <td>{{ episode.start|date:"d.m H:i" }}</td><td>{{ episode.code }}</td>
+          <td>{{ episode.duration_min|floatformat:0 }} min</td>
+          <td>{% if episode.minutes_since_startup is None %}–{% else %}{{ episode.minutes_since_startup|floatformat:0 }} min{% endif %}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="4" class="muted">Aucun défaut.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h2>Changements de réglages sur la période</h2>
+<div class="table-wrap card" style="padding:0">
+  <table>
+    <thead><tr><th>Date</th><th>Paramètre</th><th>Ancien</th><th>Nouveau</th><th>Commentaire</th></tr></thead>
+    <tbody>
+      {% for change in changes %}
+        <tr>
+          <td>{{ change.timestamp|date:"d.m H:i" }}{% if change.time_is_approximate %} ≈{% endif %}</td>
+          <td>{{ change.parameter.code }}</td><td>{{ change.old_value|default:"–" }}</td>
+          <td>{{ change.new_value }}</td><td>{{ change.comment }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" class="muted">Aucun changement.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

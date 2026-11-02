@@ -1,0 +1,11 @@
+{# Period filter used by the Graphes and Défauts pages: preset links + from/to dates. Needs `day` in the context. #}
+<div class="filters">
+  {% for preset in day.presets %}
+    <a class="preset" href="?from={{ preset.from }}&amp;to={{ preset.to }}">{{ preset.label }}</a>
+  {% endfor %}
+  <form method="get" class="filters" style="margin:0">
+    <div><label for="from">Du</label><input id="from" type="date" name="from" value="{{ day.from }}"></div>
+    <div><label for="to">Au</label><input id="to" type="date" name="to" value="{{ day.to }}"></div>
+    <button class="primary" type="submit">Afficher</button>
+  </form>
+</div>

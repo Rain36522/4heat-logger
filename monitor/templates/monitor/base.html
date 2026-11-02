@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Chauffage{% endblock %}</title>
+  <style>
+    /* Palette: dataviz reference palette, validated for 3 categorical slots in both modes.
+       Charts read these custom properties (monitor/core/charts.py uses "$name" tokens). */
+    :root {
+      color-scheme: light;
+      --page: #f9f9f7; --surface: #fcfcfb;
+      --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+      --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11, 11, 11, 0.10);
+      --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+      --critical: #d03b3b; --good: #0ca30c; --warning: #fab219;
+      --ramp0: #86b6ef; --ramp1: #6da7ec; --ramp2: #3987e5; --ramp3: #2a78d6; --ramp4: #1c5cab; --ramp5: #104281;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --page: #0d0d0d; --surface: #1a1a19;
+        --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
+        --grid: #2c2c2a; --axis: #383835; --border: rgba(255, 255, 255, 0.10);
+        --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+        --ramp0: #184f95; --ramp1: #1c5cab; --ramp2: #256abf; --ramp3: #3987e5; --ramp4: #6da7ec; --ramp5: #9ec5f4;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    a { color: var(--series-1); }
+    header { background: var(--surface); border-bottom: 1px solid var(--border); }
+    nav { display: flex; gap: 4px; align-items: center; padding: 8px 12px; overflow-x: auto; max-width: 1200px; margin: 0 auto; }
+    nav a, nav button { color: var(--ink2); text-decoration: none; padding: 8px 12px; border-radius: 8px; white-space: nowrap; background: none; border: 0; font: inherit; cursor: pointer; }
+    nav a:hover, nav button:hover { background: var(--grid); }
+    nav a[aria-current="page"] { color: var(--ink); font-weight: 600; background: var(--grid); }
+    nav .spacer { flex: 1; }
+    nav form { margin: 0; }
+    main { max-width: 1200px; margin: 0 auto; padding: 16px 12px 48px; }
+    h1 { font-size: 1.35rem; margin: 8px 0 16px; }
+    h2 { font-size: 1.05rem; margin: 28px 0 8px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+    .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin: 12px 0; }
+    .metric .label { color: var(--ink2); font-size: 0.85rem; }
+    .metric .value { font-size: 1.9rem; font-weight: 600; }
+    .metric .unit { color: var(--ink2); font-size: 0.9rem; margin-left: 2px; }
+    .badge { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+    .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--border); }
+    .dot.good { background: var(--good); } .dot.idle { background: var(--muted); } .dot.critical { background: var(--critical); }
+    .muted { color: var(--ink2); }
+    .chart { width: 100%; height: min(78vh, 720px); min-height: 460px; }
+    .chart.short { height: 520px; min-height: 380px; }
+    .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin: 0 0 12px; }
+    .filters a.preset { padding: 6px 12px; border: 1px solid var(--border); border-radius: 999px; text-decoration: none; color: var(--ink2); background: var(--surface); }
+    .filters a.preset:hover { background: var(--grid); }
+    label { display: block; font-size: 0.85rem; color: var(--ink2); margin-bottom: 2px; }
+    input, select, button.primary { font: inherit; padding: 8px 10px; border: 1px solid var(--axis); border-radius: 8px; background: var(--surface); color: var(--ink); max-width: 100%; }
+    button.primary { background: var(--series-1); color: #fff; border-color: transparent; cursor: pointer; font-weight: 600; }
+    .field { margin-bottom: 12px; } .field input[type=text], .field input[type=datetime-local], .field input[type=password] { width: 100%; }
+    .errorlist { list-style: none; padding: 0; margin: 4px 0 0; color: var(--critical); font-size: 0.9rem; }
+    .table-wrap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; background: var(--surface); }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+    th { color: var(--ink2); font-weight: 600; font-size: 0.85rem; }
+    .messages { list-style: none; padding: 0; margin: 0 0 12px; }
+    .messages li { padding: 10px 12px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--good); margin-bottom: 6px; }
+    .scale { display: flex; align-items: center; gap: 8px; color: var(--ink2); font-size: 0.85rem; margin: 8px 0; }
+    .scale .bar { width: 140px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--ramp0), var(--ramp2), var(--ramp5)); }
+    .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--critical); color: var(--ink); font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <nav aria-label="Navigation principale">
+      {% url 'status' as url_status %}{% url 'timeline' as url_timeline %}{% url 'startups' as url_startups %}
+      {% url 'faults' as url_faults %}{% url 'journal' as url_journal %}
+      <a href="{{ url_status }}" {% if request.path == url_status %}aria-current="page"{% endif %}>Statut</a>
+      <a href="{{ url_timeline }}" {% if request.path == url_timeline %}aria-current="page"{% endif %}>Graphes</a>
+      <a href="{{ url_startups }}" {% if request.path == url_startups %}aria-current="page"{% endif %}>Démarrages</a>
+      <a href="{{ url_faults }}" {% if request.path == url_faults %}aria-current="page"{% endif %}>Défauts</a>
+      <a href="{{ url_journal }}" {% if request.path == url_journal %}aria-current="page"{% endif %}>Réglages</a>
+      <span class="spacer"></span>
+      {% if user.is_staff %}<a href="{% url 'admin:index' %}">Admin</a>{% endif %}
+      {% if user.is_authenticated %}
+        <form method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit">Quitter</button></form>
+      {% endif %}
+    </nav>
+  </header>
+  <main>
+    {% if messages %}<ul class="messages">{% for message in messages %}<li>{{ message }}</li>{% endfor %}</ul>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

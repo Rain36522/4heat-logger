@@ -1,0 +1,90 @@
+{% extends "monitor/base.html" %}
+{% block title %}Réglages – Chauffage{% endblock %}
+{% block content %}
+<h1>Enregistrer un changement de réglage</h1>
+
+<form method="post" class="card" style="max-width:560px">
+  {% csrf_token %}
+  {% if form.non_field_errors %}{{ form.non_field_errors }}{% endif %}
+
+  <div class="field">
+    <label for="{{ form.parameter.id_for_label }}">Paramètre (code, ex. E12)</label>
+    {{ form.parameter }}
+    {{ form.parameter.errors }}
+    <div id="parameter-info" class="muted" aria-live="polite" style="margin-top:4px"></div>
+  </div>
+  <div class="field">
+    <label for="{{ form.new_value.id_for_label }}">Nouvelle valeur</label>
+    {{ form.new_value }}
+    {{ form.new_value.errors }}
+  </div>
+  <div class="field">
+    <label for="{{ form.timestamp.id_for_label }}">Date et heure du changement</label>
+    {{ form.timestamp }}
+    {{ form.timestamp.errors }}
+  </div>
+  <div class="field">
+    <label for="{{ form.comment.id_for_label }}">Commentaire (optionnel)</label>
+    {{ form.comment }}
+    {{ form.comment.errors }}
+  </div>
+  <button class="primary" type="submit">Enregistrer</button>
+</form>
+
+<datalist id="parameter-codes">
+  {% for parameter in parameters %}<option value="{{ parameter.code }}">{{ parameter.description|truncatechars:60 }}</option>{% endfor %}
+</datalist>
+
+<h2>40 derniers changements</h2>
+<div class="table-wrap card" style="padding:0">
+  <table>
+    <thead><tr><th>Date</th><th>Paramètre</th><th>Ancien</th><th>Nouveau</th><th>Commentaire</th></tr></thead>
+    <tbody>
+      {% for change in changes %}
+        <tr>
+          <td>{{ change.timestamp|date:"d.m.Y H:i" }}{% if change.time_is_approximate %} ≈{% endif %}</td>
+          <td>{{ change.parameter.code }}</td><td>{{ change.old_value|default:"–" }}</td>
+          <td>{{ change.new_value }}</td><td>{{ change.comment }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" class="muted">Aucun changement enregistré.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="muted">≈ : heure approximative (import Excel).</p>
+
+<script>
+(function () {
+  var input = document.getElementById("{{ form.parameter.id_for_label }}");
+  var info = document.getElementById("parameter-info");
+  var urlTemplate = "{% url 'parameter_info' code='__CODE__' %}";
+  var timer = null;
+
+  function show(text) { info.textContent = text; }  // textContent only: values come from the database
+
+  function lookup() {
+    var code = input.value.trim();
+    if (!code) { show(""); return; }
+    fetch(urlTemplate.replace("__CODE__", encodeURIComponent(code)), { credentials: "same-origin" })
+      .then(function (response) { return response.ok ? response.json() : null; })
+      .then(function (data) {
+        if (!data) { show("Paramètre inconnu."); return; }
+        var parts = [data.code];
+        if (data.section) { parts.push(data.section); }
+        if (data.description) { parts.push(data.description); }
+        if (data.state) { parts.push("état : " + data.state); }
+        var value = data.current_value ? data.current_value : "–";
+        if (data.unit) { value += " " + data.unit; }
+        parts.push("valeur actuelle : " + value);
+        show(parts.join(" · "));
+      })
+      .catch(function () { show(""); });
+  }
+
+  input.addEventListener("input", function () { clearTimeout(timer); timer = setTimeout(lookup, 250); });
+  input.addEventListener("change", lookup);
+  lookup();
+})();
+</script>
+{% endblock %}
