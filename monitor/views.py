@@ -13,10 +13,22 @@ from django.views.decorators.cache import cache_control
 
 from .core import charts
 from .core import readings as rd
+from .core.exports import CSV_CONTENT_TYPE, as_number, build_csv
 from .forms import SettingChangeForm
 from .models import CodeLabel, Parameter, SettingChange
 
 METRIC_CHOICES = [(key, label) for key, (label, _unit, _fmt) in charts.METRICS.items()]
+
+# Column titles of the readings export, in the order of rd.VALUE_COLUMNS.
+READING_HEADERS = {
+    "state": "État",
+    "error": "Défaut",
+    "exhaust_temp": "Fumées (°C)",
+    "boiler_temp": "Chaudière (°C)",
+    "oxygen_percent": "O₂ (%)",
+    "boiler_target_temp": "Consigne (°C)",
+}
+NO_SECTION = "Sans section"
 
 
 # --- helpers -----------------------------------------------------------------------
@@ -74,6 +86,51 @@ def _changes_between(start, end):
     )
     marks = [(change.timestamp, f"{change.parameter.code}: {change.old_value or '∅'} → {change.new_value}") for change in changes]
     return changes, marks
+
+
+def _csv_response(content: bytes, filename: str) -> HttpResponse:
+    response = HttpResponse(content, content_type=CSV_CONTENT_TYPE)
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
+def _change_rows(changes):
+    for change in changes:
+        yield (
+            change.timestamp,
+            "oui" if change.time_is_approximate else "",
+            change.parameter.code,
+            change.parameter.section,
+            as_number(change.old_value),
+            as_number(change.new_value),
+            change.comment,
+        )
+
+
+CHANGE_HEADERS = ["Date", "Heure approx.", "Paramètre", "Section", "Ancienne valeur", "Nouvelle valeur", "Commentaire"]
+
+
+def _parameter_rows():
+    """Every parameter with its current value, ready for the list page and the export."""
+    rows = []
+    for parameter in Parameter.objects.prefetch_related("changes"):
+        changes = list(parameter.changes.all())  # prefetched: no query per parameter
+        current = parameter.current_value
+        rows.append(
+            {
+                "code": parameter.code,
+                "section": parameter.section or NO_SECTION,
+                "description": parameter.description,
+                "unit": parameter.unit,
+                "state_label": parameter.state_label,
+                "baseline": parameter.baseline_value,
+                "current": current,
+                "modified": current != parameter.baseline_value,
+                "change_count": len(changes),
+                "last_change": max((change.timestamp for change in changes), default=None),
+            }
+        )
+    return rows
 
 
 def _show(value, decimals=0):
@@ -177,6 +234,18 @@ def timeline(request):
     )
 
 
+def timeline_export(request):
+    """The readings behind the Graphes page for the same period, as a CSV file."""
+    readings = _load_readings()
+    day = _day_range(request, readings, default_days=1)
+    window = rd.between(readings, day["start"], day["end"])
+    content = build_csv(
+        ["Date", *(READING_HEADERS[column] for column in rd.VALUE_COLUMNS)],
+        window[["timestamp", *rd.VALUE_COLUMNS]].itertuples(index=False, name=None),
+    )
+    return _csv_response(content, f"graphe_{day['from']}_{day['to']}.csv")
+
+
 def startups(request):
     readings = _load_readings()
     day = _day_range(request, readings, default_days=None)
@@ -256,6 +325,52 @@ def journal(request):
             "changes": SettingChange.objects.select_related("parameter")[:40],
         },
     )
+
+
+def parameters(request):
+    rows = _parameter_rows()
+    sections = defaultdict(list)
+    for row in rows:
+        sections[row["section"]].append(row)
+    ordered = sorted(sections.items(), key=lambda item: (item[0] == NO_SECTION, item[0].lower()))
+    return render(
+        request,
+        "monitor/parameters.html",
+        {
+            "sections": ordered,
+            "total": len(rows),
+            "modified_count": sum(row["modified"] for row in rows),
+        },
+    )
+
+
+def parameters_export(request):
+    content = build_csv(
+        ["Code", "Section", "Description", "Unité", "État concerné", "Valeur de base",
+         "Valeur actuelle", "Modifié", "Nb changements", "Dernier changement"],
+        (
+            (
+                row["code"],
+                row["section"],
+                row["description"],
+                row["unit"],
+                row["state_label"],
+                as_number(row["baseline"]),
+                as_number(row["current"]),
+                "oui" if row["modified"] else "",
+                row["change_count"],
+                row["last_change"],
+            )
+            for row in _parameter_rows()
+        ),
+    )
+    return _csv_response(content, f"parametres_{datetime.now():%Y-%m-%d}.csv")
+
+
+def changes_export(request):
+    changes = SettingChange.objects.select_related("parameter").order_by("timestamp", "id")
+    content = build_csv(CHANGE_HEADERS, _change_rows(changes))
+    return _csv_response(content, f"historique_reglages_{datetime.now():%Y-%m-%d}.csv")
 
 
 def parameter_info(request, code):

@@ -7,9 +7,24 @@
 {% if readings_count == 0 %}
   <div class="card"><p class="muted">Aucune mesure sur cette période (le collecteur n'écrit que quand le chauffage répond).</p></div>
 {% endif %}
+<div class="actions">
+  <a class="button" href="{% url 'timeline_export' %}?from={{ day.from }}&amp;to={{ day.to }}" download>Exporter CSV</a>
+  <button class="secondary" type="button" id="export-png">Image PNG</button>
+  <span class="muted">CSV : mesures du {{ day.from }} au {{ day.to }}.</span>
+</div>
 <div class="card">
   {% include "monitor/_chart.html" %}
 </div>
+<script>
+document.getElementById("export-png").addEventListener("click", function () {
+  // The chart as shown, including the zoom chosen with the mouse.
+  var chart = document.getElementById("chart");
+  Plotly.downloadImage(chart, {
+    format: "png", filename: "graphe_{{ day.from }}_{{ day.to }}",
+    width: chart.clientWidth, height: chart.clientHeight, scale: 2
+  });
+});
+</script>
 <p class="muted">Bandes rouges : défauts (code ≠ 0). Traits verticaux : changements de réglages. Les trous de plus de 5 min ne sont pas reliés.</p>
 
 <h2>Défauts sur la période</h2>

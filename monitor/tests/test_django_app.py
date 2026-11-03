@@ -176,7 +176,8 @@ class ViewTests(TestCase):
         make_parameter("UC01", "30", description="Ventilateur, puissance")
 
     def test_pages_require_a_login(self):
-        for name in ("status", "timeline", "startups", "faults", "journal"):
+        for name in ("status", "timeline", "startups", "faults", "journal", "parameters",
+                     "timeline_export", "parameters_export", "changes_export"):
             response = self.client.get(reverse(name))
             self.assertEqual(response.status_code, 302, name)
             self.assertIn(reverse("login"), response["Location"])
@@ -184,7 +185,7 @@ class ViewTests(TestCase):
     def test_all_pages_render_when_logged_in(self):
         self.client.force_login(self.user)
         day = START.date().isoformat()
-        for name in ("status", "timeline", "startups", "faults", "journal"):
+        for name in ("status", "timeline", "startups", "faults", "journal", "parameters"):
             response = self.client.get(reverse(name), {"from": day, "to": day})
             self.assertEqual(response.status_code, 200, name)
             # A template comment that leaks into the page (e.g. a multi-line {# #}).
@@ -213,6 +214,43 @@ class ViewTests(TestCase):
         self.assertRedirects(response, reverse("journal"))
         change = SettingChange.objects.get()
         self.assertEqual((change.old_value, change.new_value), ("30", "42"))
+
+    def csv_lines(self, response):
+        self.assertTrue(response.content.startswith(b"\xef\xbb\xbf"))  # BOM, for Excel
+        return [line.split(";") for line in response.content.decode("utf-8-sig").splitlines()]
+
+    def test_timeline_export_contains_the_period(self):
+        self.client.force_login(self.user)
+        day = START.date().isoformat()
+        response = self.client.get(reverse("timeline_export"), {"from": day, "to": day})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(f'filename="graphe_{day}_{day}.csv"', response["Content-Disposition"])
+        lines = self.csv_lines(response)
+        self.assertEqual(len(lines), 51)  # header + the 50 readings
+        self.assertEqual(lines[0][:2], ["Date", "État"])
+        self.assertEqual(lines[1][0], START.strftime("%d.%m.%Y %H:%M:%S"))
+        self.assertEqual(lines[1][-2], "9,5")  # oxygen, decimal comma
+
+    def test_parameters_page_and_exports(self):
+        self.client.force_login(self.user)
+        parameter = Parameter.objects.get(code="UC01")
+        parameter.section = "Ventilateur 1"
+        parameter.save()
+        make_parameter("T06", "120")
+        SettingChange.objects.create(parameter=parameter, timestamp=START, new_value="42")
+
+        page = self.client.get(reverse("parameters"))
+        self.assertContains(page, "Ventilateur 1")
+        self.assertContains(page, "Sans section")
+        self.assertEqual(page.context["modified_count"], 1)
+
+        rows = {line[0]: line for line in self.csv_lines(self.client.get(reverse("parameters_export")))[1:]}
+        self.assertEqual(rows["UC01"][5:9], ["30", "42", "oui", "1"])
+        self.assertEqual(rows["T06"][5:9], ["120", "120", "", "0"])
+
+        history = self.csv_lines(self.client.get(reverse("changes_export")))
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[1][2:6], ["UC01", "Ventilateur 1", "30", "42"])
 
     def test_parameter_info_json(self):
         self.client.force_login(self.user)

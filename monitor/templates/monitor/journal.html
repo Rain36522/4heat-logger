@@ -2,6 +2,7 @@
 {% block title %}Réglages – Chauffage{% endblock %}
 {% block content %}
 <h1>Enregistrer un changement de réglage</h1>
+<p class="muted">Liste complète des paramètres et de leurs valeurs actuelles : <a href="{% url 'parameters' %}">Paramètres</a>.</p>
 
 <form method="post" class="card" style="max-width:560px">
   {% csrf_token %}

@@ -66,6 +66,10 @@
     .messages li { padding: 10px 12px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--good); margin-bottom: 6px; }
     .scale { display: flex; align-items: center; gap: 8px; color: var(--ink2); font-size: 0.85rem; margin: 8px 0; }
     .scale .bar { width: 140px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--ramp0), var(--ramp2), var(--ramp5)); }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; }
+    a.button, button.secondary { display: inline-block; font: inherit; padding: 8px 12px; border: 1px solid var(--axis); border-radius: 8px; background: var(--surface); color: var(--ink); text-decoration: none; cursor: pointer; }
+    a.button:hover, button.secondary:hover { background: var(--grid); }
+    tr.modified td:first-child { box-shadow: inset 3px 0 0 var(--series-1); }
     .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--critical); color: var(--ink); font-size: 0.85rem; }
   </style>
 </head>
@@ -73,12 +77,13 @@
   <header>
     <nav aria-label="Navigation principale">
       {% url 'status' as url_status %}{% url 'timeline' as url_timeline %}{% url 'startups' as url_startups %}
-      {% url 'faults' as url_faults %}{% url 'journal' as url_journal %}
+      {% url 'faults' as url_faults %}{% url 'journal' as url_journal %}{% url 'parameters' as url_parameters %}
       <a href="{{ url_status }}" {% if request.path == url_status %}aria-current="page"{% endif %}>Statut</a>
       <a href="{{ url_timeline }}" {% if request.path == url_timeline %}aria-current="page"{% endif %}>Graphes</a>
       <a href="{{ url_startups }}" {% if request.path == url_startups %}aria-current="page"{% endif %}>Démarrages</a>
       <a href="{{ url_faults }}" {% if request.path == url_faults %}aria-current="page"{% endif %}>Défauts</a>
       <a href="{{ url_journal }}" {% if request.path == url_journal %}aria-current="page"{% endif %}>Réglages</a>
+      <a href="{{ url_parameters }}" {% if request.path == url_parameters %}aria-current="page"{% endif %}>Paramètres</a>
       <span class="spacer"></span>
       {% if user.is_staff %}<a href="{% url 'admin:index' %}">Admin</a>{% endif %}
       {% if user.is_authenticated %}

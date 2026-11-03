@@ -1,0 +1,71 @@
+{% extends "monitor/base.html" %}
+{% block title %}Paramètres – Chauffage{% endblock %}
+{% block content %}
+<h1>Liste des paramètres</h1>
+<p class="muted">{{ total }} paramètre{{ total|pluralize }}, dont {{ modified_count }} différent{{ modified_count|pluralize }} de la valeur de base (trait bleu à gauche).</p>
+
+<div class="actions">
+  <div><label for="search">Rechercher (code, section, description)</label><input id="search" type="search" placeholder="ex. UA0, Ventilateur" autocomplete="off"></div>
+  <div><label><input id="only-modified" type="checkbox"> Seulement les paramètres modifiés</label></div>
+  <a class="button" href="{% url 'parameters_export' %}" download>Exporter CSV</a>
+  <a class="button" href="{% url 'changes_export' %}" download>Historique CSV</a>
+</div>
+<p class="muted" id="search-count" aria-live="polite"></p>
+
+{% for section, rows in sections %}
+  <section class="parameter-section">
+    <h2>{{ section }} <span class="muted">({{ rows|length }})</span></h2>
+    <div class="table-wrap card" style="padding:0">
+      <table>
+        <thead><tr><th>Code</th><th>Valeur actuelle</th><th>Valeur de base</th><th>Description</th><th>Changements</th><th>Dernier changement</th></tr></thead>
+        <tbody>
+          {% for row in rows %}
+            <tr class="parameter-row{% if row.modified %} modified{% endif %}" data-modified="{{ row.modified|yesno:'1,0' }}"
+                data-search="{{ row.code|lower }} {{ section|lower }} {{ row.description|lower }}">
+              <td><strong>{{ row.code }}</strong></td>
+              <td>{{ row.current|default:"–" }}{% if row.unit %} {{ row.unit }}{% endif %}</td>
+              <td class="muted">{{ row.baseline|default:"–" }}</td>
+              <td>{{ row.description }}{% if row.state_label %} <span class="muted">({{ row.state_label }})</span>{% endif %}</td>
+              <td>{{ row.change_count|default:"–" }}</td>
+              <td>{{ row.last_change|date:"d.m.Y"|default:"–" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% empty %}
+  <div class="card"><p class="muted">Aucun paramètre. Importe le classeur Excel (voir README) ou ajoute-les dans l'administration.</p></div>
+{% endfor %}
+
+<script>
+(function () {
+  var search = document.getElementById("search");
+  var onlyModified = document.getElementById("only-modified");
+  var count = document.getElementById("search-count");
+  var sections = document.querySelectorAll(".parameter-section");
+
+  function apply() {
+    var words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    var shown = 0;
+    sections.forEach(function (section) {
+      var visible = 0;
+      section.querySelectorAll(".parameter-row").forEach(function (row) {
+        var text = row.getAttribute("data-search");
+        var match = words.every(function (word) { return text.indexOf(word) !== -1; })
+          && (!onlyModified.checked || row.getAttribute("data-modified") === "1");
+        row.hidden = !match;
+        if (match) { visible += 1; }
+      });
+      section.hidden = visible === 0;
+      shown += visible;
+    });
+    var filtered = words.length > 0 || onlyModified.checked;
+    count.textContent = filtered ? shown + " paramètre(s) affiché(s)." : "";
+  }
+
+  search.addEventListener("input", apply);
+  onlyModified.addEventListener("change", apply);
+})();
+</script>
+{% endblock %}
