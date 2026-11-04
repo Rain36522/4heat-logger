@@ -21,6 +21,7 @@ COLUMN_MAP = {
     "30017_boiler_temp": "boiler_temp",
     "50030_oxygen_percent": "oxygen_percent",
     "20180_boiler_target_temp": "boiler_target_temp",
+    "30038_thermostat_temp": "thermostat_temp",  # empty in rows logged before it was added
 }
 VALUE_COLUMNS = list(COLUMN_MAP.values())
 

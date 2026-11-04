@@ -77,10 +77,11 @@
   <header>
     <nav aria-label="Navigation principale">
       {% url 'status' as url_status %}{% url 'timeline' as url_timeline %}{% url 'startups' as url_startups %}
-      {% url 'faults' as url_faults %}{% url 'journal' as url_journal %}{% url 'parameters' as url_parameters %}
+      {% url 'faults' as url_faults %}{% url 'journal' as url_journal %}{% url 'parameters' as url_parameters %}{% url 'compare_days' as url_compare %}
       <a href="{{ url_status }}" {% if request.path == url_status %}aria-current="page"{% endif %}>Statut</a>
       <a href="{{ url_timeline }}" {% if request.path == url_timeline %}aria-current="page"{% endif %}>Graphes</a>
       <a href="{{ url_startups }}" {% if request.path == url_startups %}aria-current="page"{% endif %}>Démarrages</a>
+      <a href="{{ url_compare }}" {% if request.path == url_compare %}aria-current="page"{% endif %}>Comparer</a>
       <a href="{{ url_faults }}" {% if request.path == url_faults %}aria-current="page"{% endif %}>Défauts</a>
       <a href="{{ url_journal }}" {% if request.path == url_journal %}aria-current="page"{% endif %}>Réglages</a>
       <a href="{{ url_parameters }}" {% if request.path == url_parameters %}aria-current="page"{% endif %}>Paramètres</a>

@@ -9,6 +9,7 @@ urlpatterns = [
     path("graphes/", views.timeline, name="timeline"),
     path("graphes/export.csv", views.timeline_export, name="timeline_export"),
     path("demarrages/", views.startups, name="startups"),
+    path("comparer/", views.compare_days, name="compare_days"),
     path("defauts/", views.faults, name="faults"),
     path("reglages/", views.journal, name="journal"),
     path("reglages/valeur/<str:code>/", views.parameter_info, name="parameter_info"),

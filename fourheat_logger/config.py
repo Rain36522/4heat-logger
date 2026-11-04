@@ -22,7 +22,10 @@ COLUMNS = [
     ("30017", "boiler_temp", 1),  # degC
     ("50030", "oxygen_percent", 100),  # 1459 -> 14.59 %
     ("20180", "boiler_target_temp", 1),  # degC
+    ("30038", "thermostat_temp", 1),  # degC, room thermostat (20 seen on 2026-11-04)
 ]
+# New columns are only ever added at the end: an older CSV is then upgraded in place
+# (see CsvStorage.check_header) instead of being refused.
 
 
 @dataclass(frozen=True)

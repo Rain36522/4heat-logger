@@ -176,7 +176,7 @@ class ViewTests(TestCase):
         make_parameter("UC01", "30", description="Ventilateur, puissance")
 
     def test_pages_require_a_login(self):
-        for name in ("status", "timeline", "startups", "faults", "journal", "parameters",
+        for name in ("status", "timeline", "startups", "compare_days", "faults", "journal", "parameters",
                      "timeline_export", "parameters_export", "changes_export"):
             response = self.client.get(reverse(name))
             self.assertEqual(response.status_code, 302, name)
@@ -185,7 +185,7 @@ class ViewTests(TestCase):
     def test_all_pages_render_when_logged_in(self):
         self.client.force_login(self.user)
         day = START.date().isoformat()
-        for name in ("status", "timeline", "startups", "faults", "journal", "parameters"):
+        for name in ("status", "timeline", "startups", "compare_days", "faults", "journal", "parameters"):
             response = self.client.get(reverse(name), {"from": day, "to": day})
             self.assertEqual(response.status_code, 200, name)
             # A template comment that leaks into the page (e.g. a multi-line {# #}).
@@ -195,7 +195,7 @@ class ViewTests(TestCase):
     def test_pages_render_without_any_data(self):
         self.csv_path.unlink()
         self.client.force_login(self.user)
-        for name in ("status", "timeline", "startups", "faults"):
+        for name in ("status", "timeline", "startups", "compare_days", "faults"):
             self.assertEqual(self.client.get(reverse(name)).status_code, 200, name)
 
     def test_status_page_marks_the_figures_to_refresh(self):
@@ -215,6 +215,22 @@ class ViewTests(TestCase):
         change = SettingChange.objects.get()
         self.assertEqual((change.old_value, change.new_value), ("30", "42"))
 
+    def test_compare_days_reads_the_days_and_their_shifts(self):
+        self.client.force_login(self.user)
+        day = START.date().isoformat()
+        query = "day=2026-10-25&shift=0&day=&shift=99&day=" + day + "&shift=15&day=" + day + "&shift=40&metric=nope"
+        response = self.client.get(reverse("compare_days") + "?" + query)
+        self.assertEqual(response.status_code, 200)
+        # Sorted by date, empty and repeated days dropped, each day keeps its own shift.
+        self.assertEqual([(d["date"], d["shift"]) for d in response.context["days"]], [(day, 15), ("2026-10-25", 0)])
+        self.assertEqual(response.context["metric"], "boiler_temp")
+        self.assertEqual(len(response.context["figure"]["data"]), 1)  # no reading on 25.10
+
+    def test_compare_days_defaults_to_the_last_days_with_data(self):
+        self.client.force_login(self.user)
+        response = self.client.get(reverse("compare_days"))
+        self.assertEqual([d["date"] for d in response.context["days"]], [START.date().isoformat()])
+
     def csv_lines(self, response):
         self.assertTrue(response.content.startswith(b"\xef\xbb\xbf"))  # BOM, for Excel
         return [line.split(";") for line in response.content.decode("utf-8-sig").splitlines()]
@@ -229,7 +245,9 @@ class ViewTests(TestCase):
         self.assertEqual(len(lines), 51)  # header + the 50 readings
         self.assertEqual(lines[0][:2], ["Date", "État"])
         self.assertEqual(lines[1][0], START.strftime("%d.%m.%Y %H:%M:%S"))
-        self.assertEqual(lines[1][-2], "9,5")  # oxygen, decimal comma
+        self.assertEqual(lines[0][5], "O₂ (%)")
+        self.assertEqual(lines[1][5], "9,5")  # decimal comma
+        self.assertEqual(lines[1][-1], "")  # thermostat: not in this (older) CSV
 
     def test_parameters_page_and_exports(self):
         self.client.force_login(self.user)

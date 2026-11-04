@@ -9,6 +9,7 @@ system switches between light and dark mode. ({# #} only works on a single line.
 <script>
 (function () {
   var spec = JSON.parse(document.getElementById("figure-spec").textContent);
+  window.chartSpec = spec;  // a page may change it (e.g. shifted days); redraws then keep the change
   var root = document.documentElement;
 
   function resolve(node) {

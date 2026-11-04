@@ -1,5 +1,6 @@
 """The collector (fourheat_logger) writes the CSV that the app reads: both sides must agree."""
 
+import math
 import tempfile
 import threading
 import time
@@ -10,14 +11,16 @@ from fourheat_logger.config import Settings
 from fourheat_logger.module_client import ModuleError
 from fourheat_logger.monitor import Monitor
 from fourheat_logger.protocol import parse_values
-from fourheat_logger.storage import HEADER, CsvStorage
+from fourheat_logger.storage import HEADER, CsvStorage, HeaderMismatchError
 from monitor.core import readings as rd
 
 # Shape of a real module answer (ids 3 + 5 digits + value, zero-padded).
 ANSWER = (
     '["SEL","0","J30001000000000009","J30002000000000012","J30005000000000188",'
-    '"J30017000000000045","J50030000000001459","J20180000000000065","J20211000000000001"]'
+    '"J30017000000000045","J50030000000001459","J20180000000000065","J30038000000000020","J20211000000000001"]'
 )
+# Header written before the thermostat column was added.
+OLD_HEADER = "timestamp,30001_state,30002_error,30005_exhaust_temp,30017_boiler_temp,50030_oxygen_percent,20180_boiler_target_temp"
 
 
 class CollectorCompatibilityTests(unittest.TestCase):
@@ -42,12 +45,39 @@ class CollectorCompatibilityTests(unittest.TestCase):
         self.assertEqual(row["boiler_temp"], 45)
         self.assertEqual(row["oxygen_percent"], 14.59)  # 1459 / 100
         self.assertEqual(row["boiler_target_temp"], 65)
+        self.assertEqual(row["thermostat_temp"], 20)
+
+    def test_an_older_csv_gets_the_new_column_without_losing_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "4heat_log.csv"
+            old_content = OLD_HEADER + "\r\n2026-11-02T08:05:00,5,0,188,45,12.56,65\r\n"
+            path.write_text(old_content, encoding="utf-8", newline="")
+            storage = CsvStorage(path)
+            storage.check_header()
+            storage.append("2026-11-02T08:06:00", parse_values(ANSWER))
+
+            frame = rd.load_readings(path)
+            backup = path.with_name("4heat_log.csv.6cols.bak").read_text(encoding="utf-8")
+            header = path.read_text(encoding="utf-8").splitlines()[0]
+
+        self.assertEqual(header, ",".join(HEADER))
+        self.assertEqual(backup, old_content.replace("\r\n", "\n"))  # read_text translates newlines
+        self.assertEqual(list(frame["boiler_temp"]), [45, 45])
+        self.assertTrue(math.isnan(frame["thermostat_temp"].iloc[0]))  # not logged back then
+        self.assertEqual(frame["thermostat_temp"].iloc[1], 20)
+
+    def test_a_csv_with_another_header_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "4heat_log.csv"
+            path.write_text("timestamp,something_else\n2026-11-02T08:05:00,1\n", encoding="utf-8")
+            with self.assertRaises(HeaderMismatchError):
+                CsvStorage(path).check_header()
 
     def test_a_row_is_not_glued_to_a_last_line_without_newline(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "4heat_log.csv"
             # Last line complete but without its line break (copied or edited file).
-            path.write_bytes((",".join(HEADER) + "\r\n2026-11-02T08:05:00,5,0,188,45,12.56,65").encode())
+            path.write_bytes((",".join(HEADER) + "\r\n2026-11-02T08:05:00,5,0,188,45,12.56,65,19").encode())
             CsvStorage(path).append("2026-11-02T08:06:00", parse_values(ANSWER))
 
             frame = rd.load_readings(path)

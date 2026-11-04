@@ -57,6 +57,13 @@ class TimelineSpecTests(unittest.TestCase):
         state = next(trace for trace in self.spec["data"] if trace["name"] == "État")
         self.assertIn(" — Attente", state["text"])
 
+    def test_thermostat_is_drawn_with_the_temperatures(self):
+        frame = self.frame.assign(thermostat_temp=20.0)
+        spec = charts.build_timeline_spec(frame, self.episodes, [], {})
+        thermostat = next(trace for trace in spec["data"] if trace["name"] == "Thermostat")
+        self.assertEqual(thermostat["yaxis"], "y3")
+        self.assertIn(20.0, thermostat["y"])
+
     def test_empty_data_gives_a_message_instead_of_a_chart(self):
         spec = charts.build_timeline_spec(rd.empty_readings(), [], [])
         self.assertEqual(spec["data"], [])
@@ -103,6 +110,38 @@ class StartupsSpecTests(unittest.TestCase):
     def test_no_startup_gives_a_message(self):
         spec = charts.build_startups_spec(rd.empty_readings(), [], [], "boiler_temp", 45)
         self.assertEqual(spec["data"], [])
+
+
+class DaysSpecTests(unittest.TestCase):
+    def setUp(self):
+        # Same hours on two consecutive days (START is 06:00).
+        rows = [(i, 5, 0) for i in range(0, 20)] + [(24 * 60 + i, 5, 0) for i in range(0, 20)]
+        self.frame = make_frame(rows)
+        self.days = [START.date(), (START + pd.Timedelta(days=1)).date()]
+
+    def test_each_day_is_drawn_on_the_same_reference_day(self):
+        spec = charts.build_days_spec(self.frame, [(day, 0) for day in self.days], "boiler_temp")
+        json.dumps(spec, allow_nan=False)
+        self.assertLessEqual(tokens_in(spec), charts.TOKENS)
+        first, second = spec["data"]
+        six_am = charts.DAY_ZERO_MS + 6 * 3_600_000
+        self.assertEqual(first["x"][0], six_am)
+        self.assertEqual(second["x"][0], six_am)
+        self.assertEqual(first["text"][0], "06:00")  # real time kept for the hover
+        self.assertEqual([trace["line"]["width"] for trace in spec["data"]], [1.5, 3])
+
+    def test_shift_moves_the_curve_and_is_remembered_for_the_page(self):
+        spec = charts.build_days_spec(self.frame, [(self.days[0], 0), (self.days[1], -30)], "boiler_temp")
+        second = spec["data"][1]
+        self.assertEqual(second["x"][0], charts.DAY_ZERO_MS + (6 * 60 - 30) * 60_000)
+        self.assertEqual(second["meta"]["shift"], -30)
+        self.assertIn("(-30 min)", second["name"])
+
+    def test_day_without_data_is_skipped_and_no_data_gives_a_message(self):
+        empty_day = (START + pd.Timedelta(days=5)).date()
+        spec = charts.build_days_spec(self.frame, [(self.days[0], 0), (empty_day, 0)], "boiler_temp")
+        self.assertEqual(len(spec["data"]), 1)
+        self.assertEqual(charts.build_days_spec(self.frame, [(empty_day, 0)], "boiler_temp")["data"], [])
 
 
 if __name__ == "__main__":

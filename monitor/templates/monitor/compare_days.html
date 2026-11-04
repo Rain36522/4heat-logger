@@ -1,0 +1,123 @@
+{% extends "monitor/base.html" %}
+{% block title %}Comparer des jours – Chauffage{% endblock %}
+{% block content %}
+<h1>Comparer des jours</h1>
+<p class="muted">Les jours choisis sont superposés sur une même journée (00:00 → 24:00). Décale un jour avec son curseur pour aligner un moment comparable (un démarrage, une montée en température) : la courbe bouge tout de suite, le survol garde l'heure réelle de la mesure.</p>
+
+<form method="get" id="days-form">
+  <div class="filters">
+    <div>
+      <label for="metric">Mesure</label>
+      <select id="metric" name="metric">
+        {% for key, label in metric_choices %}<option value="{{ key }}" {% if key == metric %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </div>
+  </div>
+
+  <div class="card day-rows">
+    {% for day in days %}
+      <div class="day-row" data-day="{{ day.date }}">
+        <div><label for="day-{{ forloop.counter }}">Jour</label><input id="day-{{ forloop.counter }}" type="date" name="day" value="{{ day.date }}"></div>
+        <div class="shift">
+          <label for="shift-{{ forloop.counter }}">Décalage (min)</label>
+          <div class="shift-inputs">
+            <input class="shift-range" type="range" min="-{{ max_shift }}" max="{{ max_shift }}" step="5" value="{{ day.shift }}" aria-label="Décalage de {{ day.label }}">
+            <input class="shift-number" id="shift-{{ forloop.counter }}" type="number" name="shift" min="-{{ max_shift }}" max="{{ max_shift }}" step="1" value="{{ day.shift }}">
+          </div>
+        </div>
+        <button class="secondary remove-day" type="button" aria-label="Retirer {{ day.label }}">Retirer</button>
+      </div>
+    {% endfor %}
+    {% if can_add %}
+      <div class="day-row">
+        <div><label for="day-new">Ajouter un jour</label><input id="day-new" type="date" name="day"></div>
+        <div><label for="shift-new">Décalage (min)</label><input id="shift-new" class="shift-number" type="number" name="shift" min="-{{ max_shift }}" max="{{ max_shift }}" value="0"></div>
+      </div>
+    {% endif %}
+    <div class="actions" style="margin:12px 0 0">
+      <button class="primary" type="submit">Afficher</button>
+      <button class="secondary" type="button" id="reset-shifts">Décalages à 0</button>
+    </div>
+  </div>
+</form>
+
+<div class="scale"><span>jour le plus ancien</span><span class="bar"></span><span>le plus récent (trait plus épais)</span></div>
+<div class="card">
+  {% include "monitor/_chart.html" %}
+</div>
+
+<h2>Changements de réglages entre ces jours</h2>
+<div class="table-wrap card" style="padding:0">
+  <table>
+    <thead><tr><th>Date</th><th>Paramètre</th><th>Ancien</th><th>Nouveau</th><th>Commentaire</th></tr></thead>
+    <tbody>
+      {% for change in changes %}
+        <tr>
+          <td>{{ change.timestamp|date:"d.m.Y H:i" }}{% if change.time_is_approximate %} ≈{% endif %}</td>
+          <td>{{ change.parameter.code }}</td><td>{{ change.old_value|default:"–" }}</td>
+          <td>{{ change.new_value }}</td><td>{{ change.comment }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" class="muted">Aucun changement entre le premier et le dernier jour choisis.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<style>
+  .day-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; padding: 8px 0; border-bottom: 1px solid var(--grid); }
+  .day-row:last-of-type { border-bottom: 0; }
+  .day-row .shift { flex: 1; min-width: 240px; }
+  .shift-inputs { display: flex; gap: 8px; align-items: center; }
+  .shift-range { flex: 1; min-width: 120px; accent-color: var(--series-1); }
+  .shift-number { width: 90px; }
+</style>
+<script>
+(function () {
+  var spec = JSON.parse(document.getElementById("figure-spec").textContent);
+  var MINUTE_MS = 60000;
+
+  function traceIndex(day) {
+    for (var i = 0; i < spec.data.length; i++) {
+      if (spec.data[i].meta && spec.data[i].meta.day === day) { return i; }
+    }
+    return -1;
+  }
+
+  // Move one curve: x is drawn with meta.shift, move it by the difference to the new shift.
+  function applyShift(row, shift) {
+    var index = traceIndex(row.getAttribute("data-day"));
+    if (index < 0) { return; }
+    var trace = spec.data[index];
+    var delta = (shift - trace.meta.shift) * MINUTE_MS;
+    trace.x = trace.x.map(function (value) { return value + delta; });
+    trace.meta.shift = shift;
+    trace.name = trace.meta.label + (shift ? " (" + (shift > 0 ? "+" : "") + shift + " min)" : "");
+    Plotly.restyle("chart", { x: [trace.x], name: [trace.name] }, [index]);
+  }
+
+  document.querySelectorAll(".day-row[data-day]").forEach(function (row) {
+    var range = row.querySelector(".shift-range");
+    var number = row.querySelector(".shift-number");
+    range.addEventListener("input", function () { number.value = range.value; applyShift(row, Number(range.value)); });
+    number.addEventListener("input", function () {
+      var shift = Math.round(Number(number.value) || 0);
+      range.value = shift;
+      applyShift(row, shift);
+    });
+    row.querySelector(".remove-day").addEventListener("click", function () {
+      row.querySelector('input[type="date"]').value = "";
+      document.getElementById("days-form").submit();
+    });
+  });
+
+  document.getElementById("reset-shifts").addEventListener("click", function () {
+    document.querySelectorAll(".day-row[data-day]").forEach(function (row) {
+      row.querySelector(".shift-range").value = 0;
+      row.querySelector(".shift-number").value = 0;
+      applyShift(row, 0);
+    });
+  });
+})();
+</script>
+{% endblock %}

@@ -31,7 +31,12 @@ METRICS = {
     "exhaust_temp": ("Fumées", "°C", ".0f"),
     "oxygen_percent": ("O₂", "%", ".2f"),
     "state": ("État", "", ".0f"),
+    "boiler_target_temp": ("Consigne", "°C", ".0f"),
+    "thermostat_temp": ("Thermostat", "°C", ".0f"),
 }
+WEEKDAYS = ["lun", "mar", "mer", "jeu", "ven", "sam", "dim"]
+# Midnight of the reference day the compared days are drawn on (2000-01-01, in ms as Plotly reads dates).
+DAY_ZERO_MS = 946_684_800_000
 
 CONFIG = {
     "responsive": True,
@@ -71,7 +76,7 @@ def _title(text: str) -> dict:
     return {"text": text, "font": {"color": "$ink2", "size": 12}, "standoff": 8}
 
 
-def _line(name, x, y, color, yaxis, hover, width=2, shape="linear", text=None) -> dict:
+def _line(name, x, y, color, yaxis, hover, width=2, shape="linear", text=None, dash="solid") -> dict:
     trace = {
         "type": "scatter",
         "mode": "lines",
@@ -80,7 +85,7 @@ def _line(name, x, y, color, yaxis, hover, width=2, shape="linear", text=None) -
         "y": y,
         "xaxis": "x",
         "yaxis": yaxis,
-        "line": {"color": color, "width": width, "shape": shape},
+        "line": {"color": color, "width": width, "shape": shape, "dash": dash},
         "connectgaps": False,
         "hovertemplate": hover + "<extra></extra>",
     }
@@ -139,6 +144,7 @@ def build_timeline_spec(
         _line("Chaudière", x, _values(frame, "boiler_temp"), "$series-1", "y3", "%{y:.0f} °C"),
         _line("Fumées", x, _values(frame, "exhaust_temp"), "$series-2", "y3", "%{y:.0f} °C"),
         _line("Consigne", x, _values(frame, "boiler_target_temp"), "$ink2", "y3", "%{y:.0f} °C", width=1.5),
+        _line("Thermostat", x, _values(frame, "thermostat_temp"), "$muted", "y3", "%{y:.0f} °C", width=1.5, dash="dot"),
         _line("O₂", x, _values(frame, "oxygen_percent"), "$series-3", "y2", "%{y:.2f} %"),
         _line("État", x, _values(frame, "state"), "$ink", "y", "%{y:.0f}%{text}", width=1.5, shape="hv", text=state_text),
     ]
@@ -290,6 +296,65 @@ def build_startups_spec(
         "hoverlabel": {"bgcolor": "$surface", "bordercolor": "$axis", "font": {"color": "$ink", "size": 12}},
         "legend": {"orientation": "h", "x": 0, "y": 1.06, "yanchor": "bottom", "font": {"color": "$ink2"}},
         "xaxis": _axis(title=_title("minutes depuis le démarrage"), rangemode="tozero"),
+        "yaxis": _axis(title=_title(title)),
+    }
+    return {"data": traces, "layout": layout, "config": CONFIG}
+
+
+def day_label(day) -> str:
+    return f"{WEEKDAYS[day.weekday()]} {day:%d.%m.%Y}"
+
+
+def build_days_spec(readings: pd.DataFrame, days: list[tuple], metric: str) -> dict:
+    """Chosen days drawn over one 00:00–24:00 axis, to compare how the regulation behaves.
+
+    `days` is a list of (date, shift in minutes), oldest first. Each curve is moved by its
+    shift so similar moments (a startup, a setpoint change) can be lined up; the hover keeps
+    the real time of the reading. x is a time of day on a fixed reference day (DAY_ZERO_MS,
+    milliseconds); each trace carries meta = {day, shift, label} so the page can move it
+    again without reloading.
+    Colour is the same one-hue ramp as the startups chart, the latest day drawn thicker.
+    """
+    label, unit, fmt = METRICS[metric]
+    suffix = f" {unit}" if unit else ""
+    traces = []
+    for rank, (day, shift) in enumerate(days):
+        start = pd.Timestamp(day)
+        part = between(readings, start, start + pd.Timedelta(days=1)).dropna(subset=[metric])
+        if part.empty:
+            continue
+        part = insert_gap_breaks(part)
+        minutes = (part["timestamp"] - start).dt.total_seconds() / 60
+        bucket = round(rank * 5 / max(len(days) - 1, 1))
+        name = day_label(day)
+        traces.append(
+            {
+                "type": "scatter", "mode": "lines", "name": name + (f" ({shift:+d} min)" if shift else ""),
+                "x": [DAY_ZERO_MS + round((value + shift) * 60_000) for value in minutes],
+                "y": _values(part, metric),
+                "text": [moment.strftime("%H:%M") for moment in part["timestamp"]],
+                "meta": {"day": day.isoformat(), "shift": shift, "label": name},
+                "line": {"color": f"$ramp{bucket}", "width": 3 if rank == len(days) - 1 else 1.5},
+                "connectgaps": False,
+                "hovertemplate": f"{name} · %{{text}} · %{{y:{fmt}}}{suffix}<extra></extra>",
+            }
+        )
+    if not traces:
+        return _empty_spec("Aucune mesure pour les jours choisis")
+
+    title = f"{label} ({unit})" if unit else label
+    layout = {
+        "paper_bgcolor": "$surface",
+        "plot_bgcolor": "$surface",
+        "font": {"family": FONT, "color": "$ink2", "size": 12},
+        "margin": {"l": 64, "r": 16, "t": 40, "b": 56},
+        "hovermode": "x unified",
+        "hoverlabel": {"bgcolor": "$surface", "bordercolor": "$axis", "font": {"color": "$ink", "size": 12}},
+        "legend": {"orientation": "h", "x": 0, "y": 1.04, "yanchor": "bottom", "font": {"color": "$ink2"}},
+        "xaxis": _axis(
+            type="date", title=_title("heure de la journée (après décalage)"),
+            tickformat="%H:%M", hoverformat="%H:%M", showspikes=True, spikemode="across", spikethickness=1, spikecolor="$muted", spikedash="solid",
+        ),
         "yaxis": _axis(title=_title(title)),
     }
     return {"data": traces, "layout": layout, "config": CONFIG}

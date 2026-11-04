@@ -27,6 +27,7 @@ READING_HEADERS = {
     "boiler_temp": "Chaudière (°C)",
     "oxygen_percent": "O₂ (%)",
     "boiler_target_temp": "Consigne (°C)",
+    "thermostat_temp": "Thermostat (°C)",
 }
 NO_SECTION = "Sans section"
 
@@ -202,6 +203,7 @@ def status(request):
             {"label": "Consigne", "value": _show(latest("boiler_target_temp")), "unit": "°C"},
             {"label": "Fumées", "value": _show(latest("exhaust_temp")), "unit": "°C"},
             {"label": "O₂", "value": _show(latest("oxygen_percent"), 1), "unit": "%"},
+            {"label": "Thermostat", "value": _show(latest("thermostat_temp")), "unit": "°C"},
         ],
         week_defect_count=len(week_episodes),
         last_defects=list(reversed(week_episodes))[:3],
@@ -273,6 +275,51 @@ def startups(request):
             "window_min": window_min,
             "min_gap": min_gap,
             "startup_count": len(shown),
+        },
+    )
+
+
+MAX_COMPARED_DAYS = 8
+MAX_SHIFT_MIN = 720
+
+
+def compare_days(request):
+    """Several chosen days on one 00:00–24:00 axis, each with its own time shift."""
+    readings = _load_readings()
+    metric = request.GET.get("metric", "boiler_temp")
+    if metric not in charts.METRICS:
+        metric = "boiler_temp"
+
+    shifts = request.GET.getlist("shift")
+    chosen = {}
+    for index, text in enumerate(request.GET.getlist("day")):
+        day = _parse_day(text)
+        if day is not None and day not in chosen:
+            shift = shifts[index] if index < len(shifts) else None
+            chosen[day] = _bounded_int(shift, 0, -MAX_SHIFT_MIN, MAX_SHIFT_MIN)
+    if not chosen and not readings.empty:
+        # First visit: the last three days with data, not shifted.
+        chosen = {day: 0 for day in sorted(set(readings["timestamp"].dt.date))[-3:]}
+    days = sorted(chosen.items())[:MAX_COMPARED_DAYS]
+
+    changes = []
+    if days:
+        first, last = days[0][0], days[-1][0]
+        changes, _ = _changes_between(
+            datetime.combine(first, time.min), datetime.combine(last, time.min) + timedelta(days=1)
+        )
+    return render(
+        request,
+        "monitor/compare_days.html",
+        {
+            "figure": charts.build_days_spec(readings, days, metric),
+            "chart_label": "Jours choisis superposés sur une même journée",
+            "days": [{"date": day.isoformat(), "label": charts.day_label(day), "shift": shift} for day, shift in days],
+            "can_add": len(days) < MAX_COMPARED_DAYS,
+            "max_shift": MAX_SHIFT_MIN,
+            "metric": metric,
+            "metric_choices": METRIC_CHOICES,
+            "changes": changes,
         },
     )
 
