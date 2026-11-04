@@ -3,7 +3,7 @@
           module unreachable ──(every presence_interval)──> TCP test
                  │ reachable
                  ▼
-          read values ──fails──> module unreachable
+          read values ──fails read_attempts times──> module unreachable
                  │
           boiler at rest ──(every presence_interval)──> read again, record nothing
                  │ running
@@ -62,11 +62,9 @@ class Monitor:
             if self._stop.wait(settings.probe_settle):
                 return 0.0
 
-        try:
-            values = self._client.read_values()
-        except ModuleError as error:
-            self._set_online(False, str(error))
-            return settings.presence_interval
+        values = self._read_with_retries()
+        if values is None:
+            return 0.0 if self._stop.is_set() else settings.presence_interval
         self._set_online(True)
 
         running = self._is_running(values)
@@ -76,6 +74,23 @@ class Monitor:
 
         self._storage.append(datetime.now().isoformat(timespec="seconds"), values)
         return settings.record_interval
+
+    def _read_with_retries(self) -> Optional[dict[str, int]]:
+        """Read the values; a single failed read happens now and then, so try a few times
+        before calling the module unreachable. None = every attempt failed (or stop asked)."""
+        attempts = max(1, self._settings.read_attempts)
+        for attempt in range(1, attempts + 1):
+            try:
+                return self._client.read_values()
+            except ModuleError as error:
+                if attempt == attempts:
+                    self._set_online(False, f"{error}, {attempts} attempts")
+                    return None
+                logger.info("read failed (attempt %d/%d: %s), retrying in %.0f s",
+                            attempt, attempts, error, self._settings.retry_delay)
+            if self._stop.wait(self._settings.retry_delay):
+                return None
+        return None
 
     @staticmethod
     def _is_running(values: dict[str, int]) -> bool:

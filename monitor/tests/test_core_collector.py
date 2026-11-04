@@ -103,7 +103,49 @@ class FussyModule:
         return parse_values(ANSWER)
 
 
+class FlakyModule:
+    """Reachable module whose first `failures` reads fail."""
+
+    def __init__(self, failures):
+        self.failures = failures
+        self.reads = 0
+
+    def is_reachable(self):
+        return True
+
+    def read_values(self):
+        self.reads += 1
+        if self.reads <= self.failures:
+            raise ModuleError("no values in answer: ''")
+        return parse_values(ANSWER)
+
+
 class MonitorTests(unittest.TestCase):
+    def run_one_cycle(self, module, attempts=3):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "4heat_log.csv"
+            settings = Settings(host="module", probe_settle=0, retry_delay=0, read_attempts=attempts, output=path)
+            monitor = Monitor(settings, module, CsvStorage(path), threading.Event())
+            monitor._online = True  # already connected: the case where a single read fails now and then
+            next_wait = monitor._do_cycle()
+            return settings, monitor, next_wait, rd.load_readings(path)
+
+    def test_a_failed_read_is_retried_before_calling_the_module_unreachable(self):
+        module = FlakyModule(failures=2)
+        settings, monitor, next_wait, frame = self.run_one_cycle(module)
+        self.assertEqual(module.reads, 3)
+        self.assertTrue(monitor._online)
+        self.assertEqual(next_wait, settings.record_interval)
+        self.assertEqual(len(frame), 1)
+
+    def test_module_is_unreachable_once_every_attempt_failed(self):
+        module = FlakyModule(failures=99)
+        settings, monitor, next_wait, frame = self.run_one_cycle(module)
+        self.assertEqual(module.reads, 3)
+        self.assertFalse(monitor._online)
+        self.assertEqual(next_wait, settings.presence_interval)
+        self.assertTrue(frame.empty)
+
     def test_waits_after_the_tcp_test_before_reading(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "4heat_log.csv"

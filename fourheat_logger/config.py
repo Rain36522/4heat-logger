@@ -37,6 +37,8 @@ class Settings:
     probe_timeout: float = 3.0  # seconds, TCP connection test
     probe_settle: float = 3.0  # seconds between the TCP test and the read (see Monitor._do_cycle)
     read_timeout: float = 10.0  # seconds, wait for the module answer
-    presence_interval: float = 120.0  # seconds between checks while unreachable or at rest
-    record_interval: float = 30.0  # seconds between readings while the boiler runs
+    read_attempts: int = 3  # reads tried before the module is considered unreachable
+    retry_delay: float = 5.0  # seconds between two read attempts
+    presence_interval: float = 90.0  # seconds between checks while unreachable or at rest
+    record_interval: float = 40.0  # seconds between readings while the boiler runs
     output: Path = Path("4heat_log.csv")

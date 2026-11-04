@@ -27,6 +27,10 @@ def parse_args() -> Settings:
                         help="seconds between checks while the module is unreachable or the boiler at rest")
     parser.add_argument("--record-interval", type=float, default=defaults.record_interval,
                         help="seconds between readings while the boiler runs")
+    parser.add_argument("--read-attempts", type=int, default=defaults.read_attempts,
+                        help="reads tried before the module is considered unreachable")
+    parser.add_argument("--retry-delay", type=float, default=defaults.retry_delay,
+                        help="seconds between two read attempts")
     args = parser.parse_args()
     return Settings(
         host=args.host,
@@ -34,6 +38,8 @@ def parse_args() -> Settings:
         output=args.output,
         presence_interval=args.presence_interval,
         record_interval=args.record_interval,
+        read_attempts=args.read_attempts,
+        retry_delay=args.retry_delay,
     )
 
 
