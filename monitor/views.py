@@ -11,6 +11,7 @@ from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.views.decorators.cache import cache_control
 
+from .core import boiler_cycle as boiler_cycle_data
 from .core import charts
 from .core import readings as rd
 from .core.exports import CSV_CONTENT_TYPE, as_number, build_csv
@@ -388,6 +389,21 @@ def parameters(request):
             "total": len(rows),
             "modified_count": sum(row["modified"] for row in rows),
         },
+    )
+
+
+def boiler_cycle(request):
+    """Read-only explanation of the boiler cycle, with the current parameter values."""
+    readings = _load_readings()
+    live = {}
+    if not readings.empty:
+        live = {key: rd.last_valid(readings, column)[0] for key, column in
+                (("oxygen", "oxygen_percent"), ("exhaust", "exhaust_temp"), ("boiler", "boiler_temp"), ("state", "state"))}
+        live["time"] = readings["timestamp"].iloc[-1].strftime("%d.%m.%Y %H:%M")
+    return render(
+        request,
+        "monitor/boiler_cycle.html",
+        {"cycle": boiler_cycle_data.build_payload(_parameter_rows(), live)},
     )
 
 

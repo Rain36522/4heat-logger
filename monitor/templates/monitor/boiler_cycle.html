@@ -1,0 +1,896 @@
+{% extends "monitor/base.html" %}
+{% block title %}Cycle de la chaudière – Chauffage{% endblock %}
+{% block content %}
+{% comment %}
+Read-only explanation of the boiler cycle. Everything is drawn by the script below from
+`cycle` (monitor.core.boiler_cycle.build_payload): the cycle description plus the current
+parameter values from the database. Styles are scoped under .boiler-cycle.
+{% endcomment %}
+<div class="boiler-cycle">
+  <h1>Comprendre le cycle de la chaudière</h1>
+  <p class="muted">Valeurs = réglages actuels de l'application. Survoler un paramètre allume ses autres apparitions ; cliquer l'ouvre. Lecture seule.</p>
+
+  <div class="bc-tabs" role="tablist" aria-label="Sections">
+    <button type="button" role="tab" id="bc-tab-cycle" aria-controls="bc-panel-cycle" aria-selected="true">Cycle de fonctionnement</button>
+    <button type="button" role="tab" id="bc-tab-params" aria-controls="bc-panel-params" aria-selected="false" tabindex="-1">Tous les paramètres</button>
+    <button type="button" role="tab" id="bc-tab-errors" aria-controls="bc-panel-errors" aria-selected="false" tabindex="-1">Erreurs</button>
+    <button type="button" role="tab" id="bc-tab-help" aria-controls="bc-panel-help" aria-selected="false" tabindex="-1">Comment lire cette page</button>
+  </div>
+
+  <section id="bc-panel-cycle" role="tabpanel" aria-labelledby="bc-tab-cycle">
+    <div class="card">
+      <h2>Vue d'ensemble</h2>
+      <div class="bc-diagram" id="bc-diagram"></div>
+      <div class="bc-legend-inline" id="bc-legend"></div>
+    </div>
+    <p class="bc-live" id="bc-live"></p>
+    <div id="bc-board"></div>
+    <div class="card bc-summary"><h2>En résumé</h2><ul id="bc-summary"></ul></div>
+  </section>
+
+  <section id="bc-panel-params" role="tabpanel" aria-labelledby="bc-tab-params" hidden>
+    <div class="actions bc-filters">
+      <div><label for="bc-search">Rechercher (code ou texte)</label><input id="bc-search" type="search" autocomplete="off" placeholder="ex. TH09, allumage"></div>
+      <div><label for="bc-section">Section</label><select id="bc-section"><option value="">Toutes</option></select></div>
+      <div><label><input id="bc-modified" type="checkbox"> Seulement les modifiés</label></div>
+    </div>
+    <p class="muted" id="bc-count" aria-live="polite"></p>
+    <div class="table-wrap card" style="padding:0">
+      <table class="bc-table">
+        <thead><tr><th>Code</th><th>Nom</th><th>Unité</th><th>Valeur de base</th><th>Valeur actuelle</th><th>Où il intervient</th></tr></thead>
+        <tbody id="bc-params-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="bc-panel-errors" role="tabpanel" aria-labelledby="bc-tab-errors" hidden>
+    <h2>Erreurs de la chaudière</h2>
+    <div class="table-wrap card" style="padding:0">
+      <table class="bc-table">
+        <thead><tr><th>Affichage</th><th>Description</th><th>Étape où elle se déclenche</th><th>Paramètres liés</th></tr></thead>
+        <tbody id="bc-errors-body"></tbody>
+      </table>
+    </div>
+    <p class="muted" id="bc-errors-note"></p>
+    <h2>Erreurs de la sonde lambda</h2>
+    <p class="bc-warning" id="bc-lambda-warning" role="note"></p>
+    <div class="table-wrap card" style="padding:0">
+      <table class="bc-table">
+        <thead><tr><th>Affichage</th><th>Description</th><th>Causes / solutions</th></tr></thead>
+        <tbody id="bc-lambda-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="bc-panel-help" role="tabpanel" aria-labelledby="bc-tab-help" hidden>
+    <div class="card">
+      <h2>Familles de codes</h2>
+      <div class="table-wrap"><table class="bc-table"><tbody id="bc-families-body"></tbody></table></div>
+    </div>
+    <div class="card">
+      <h2>Lire le schéma</h2>
+      <ul class="bc-help-list" id="bc-help-chips"></ul>
+    </div>
+    <div class="card">
+      <h2>Couleurs</h2>
+      <div id="bc-help-legend"></div>
+    </div>
+    <div class="card">
+      <h2>Zones d'ombre du document constructeur</h2>
+      <p class="muted">Points que le document ne tranche pas ; la page les affiche tels quels.</p>
+      <ol id="bc-shadows"></ol>
+    </div>
+  </section>
+
+  <dialog id="bc-dialog" aria-labelledby="bc-dialog-title">
+    <div class="bc-dialog-head">
+      <h2 id="bc-dialog-title"></h2>
+      <button type="button" class="secondary" id="bc-dialog-close">Fermer</button>
+    </div>
+    <div id="bc-dialog-body"></div>
+  </dialog>
+</div>
+
+{{ cycle|json_script:"cycle-data" }}
+
+<style>
+  .boiler-cycle {
+    --bc-start: var(--series-1); --bc-run: var(--series-3); --bc-standby: var(--muted);
+    --bc-stop: var(--series-2); --bc-danger: var(--critical); --bc-system: var(--ink2);
+  }
+  .boiler-cycle .card { margin-bottom: 12px; }
+  .boiler-cycle .card h2 { margin-top: 0; }
+  .boiler-cycle .bc-tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--border); margin: 0 0 16px; }
+  .boiler-cycle .bc-tabs button { font: inherit; background: none; border: 0; border-bottom: 3px solid transparent; padding: 8px 12px; color: var(--ink2); cursor: pointer; }
+  .boiler-cycle .bc-tabs button[aria-selected="true"] { color: var(--ink); font-weight: 600; border-bottom-color: var(--series-1); }
+  .boiler-cycle button:focus-visible, .boiler-cycle .bc-node:focus-visible, .boiler-cycle .bc-sub:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+  .boiler-cycle .bc-fam-start { --bc-c: var(--bc-start); } .boiler-cycle .bc-fam-run { --bc-c: var(--bc-run); }
+  .boiler-cycle .bc-fam-standby { --bc-c: var(--bc-standby); } .boiler-cycle .bc-fam-stop { --bc-c: var(--bc-stop); }
+  .boiler-cycle .bc-fam-danger { --bc-c: var(--bc-danger); } .boiler-cycle .bc-fam-system { --bc-c: var(--bc-system); }
+
+  /* Overview diagram */
+  .boiler-cycle .bc-diagram { overflow-x: auto; }
+  .boiler-cycle .bc-diagram svg { width: 100%; min-width: 760px; height: auto; display: block; }
+  .boiler-cycle .bc-diagram text { text-anchor: middle; dominant-baseline: central; pointer-events: none; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .boiler-cycle .bc-node, .boiler-cycle .bc-sub { cursor: pointer; }
+  .boiler-cycle .bc-node-box { fill: color-mix(in srgb, var(--bc-c) 16%, var(--surface)); stroke: var(--bc-c); stroke-width: 2; }
+  .boiler-cycle .bc-node:hover .bc-node-box, .boiler-cycle .bc-node.selected .bc-node-box { stroke-width: 4; fill: color-mix(in srgb, var(--bc-c) 26%, var(--surface)); }
+  .boiler-cycle .bc-node-title { fill: var(--ink); font-size: 15px; font-weight: 600; }
+  .boiler-cycle .bc-node-subtitle { fill: var(--ink2); font-size: 12px; }
+  .boiler-cycle .bc-column-title { fill: var(--ink2); font-size: 11.5px; font-weight: 600; }
+  .boiler-cycle .bc-column-title.dashed { fill: var(--muted); font-style: italic; }
+  .boiler-cycle .bc-sub rect { fill: var(--surface); stroke: var(--bc-c); stroke-width: 1.3; }
+  .boiler-cycle .bc-sub:hover rect, .boiler-cycle .bc-sub.selected rect { stroke-width: 3; fill: color-mix(in srgb, var(--bc-c) 12%, var(--surface)); }
+  .boiler-cycle .bc-sub.inactive { opacity: 0.55; }
+  .boiler-cycle .bc-sub.inactive rect { stroke-dasharray: 4 3; stroke: var(--muted); }
+  .boiler-cycle .bc-sub-title { fill: var(--ink); font-size: 12.5px; font-weight: 600; }
+  .boiler-cycle .bc-sub-duration { fill: var(--ink2); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .boiler-cycle .bc-sub-arrow { stroke: var(--ink2); stroke-width: 1.2; }
+  .boiler-cycle .bc-edge { fill: none; stroke: var(--ink2); stroke-width: 1.8; }
+  .boiler-cycle .bc-edge.dashed { stroke: var(--muted); stroke-dasharray: 6 5; }
+  .boiler-cycle .bc-diagram .bc-edge-label { fill: var(--ink2); font-size: 12px; dominant-baseline: auto; paint-order: stroke; stroke: var(--surface); stroke-width: 4px; }
+  .boiler-cycle .bc-diagram .bc-edge-label.dashed { fill: var(--muted); font-style: italic; }
+  .boiler-cycle .bc-arrow-head { fill: var(--ink2); } .boiler-cycle .bc-arrow-head.dashed { fill: var(--muted); }
+  .boiler-cycle .bc-legend-inline { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; }
+  .boiler-cycle .bc-legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--ink2); }
+  .boiler-cycle .bc-swatch { width: 16px; height: 11px; border-radius: 3px; border: 2px solid var(--bc-c); background: color-mix(in srgb, var(--bc-c) 16%, var(--surface)); flex: none; }
+  .boiler-cycle .bc-line { width: 26px; border-top: 2px solid var(--ink2); flex: none; }
+  .boiler-cycle .bc-line.dashed { border-top: 2px dashed var(--muted); }
+  .boiler-cycle .bc-live { color: var(--ink2); font-size: 0.9rem; margin: 4px 0 12px; }
+
+  /* Detailed board */
+  .boiler-cycle .bc-row-title { font-size: 0.95rem; color: var(--ink2); text-transform: uppercase; letter-spacing: 0.04em; margin: 20px 0 8px; }
+  .boiler-cycle .bc-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; }
+  .boiler-cycle .bc-connector { align-self: flex-start; margin-top: 8px; font-size: 1.6rem; line-height: 1; color: var(--ink); flex: none; padding: 0 2px; }
+  .boiler-cycle .bc-connector.dashed { color: var(--muted); opacity: 0.6; }
+  .boiler-cycle .bc-card { background: var(--surface); border: 2px solid var(--bc-c); border-radius: 12px; padding: 10px; flex: 0 1 var(--bc-w, 300px); width: var(--bc-w, 300px); min-width: 0; scroll-margin-top: 12px; transition: box-shadow 0.2s; }
+  .boiler-cycle .bc-card[data-block="ignition"] { --bc-w: 340px; }
+  .boiler-cycle .bc-card[data-block="normal"] { --bc-w: 560px; }
+  .boiler-cycle .bc-card[data-block="standby"] { --bc-w: 470px; }
+  .boiler-cycle .bc-system { width: auto; }
+  .boiler-cycle .bc-card > header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+  .boiler-cycle .bc-card h3 { margin: 0; font-size: 1.05rem; color: var(--ink); }
+  .boiler-cycle .bc-card.bc-flash, .boiler-cycle .bc-card.bc-hl-card { box-shadow: 0 0 0 4px color-mix(in srgb, var(--bc-c) 45%, transparent); }
+  .boiler-cycle .bc-explain { font-size: 0.85rem; color: var(--ink2); margin-left: auto; }
+  .boiler-cycle .bc-explain summary { cursor: pointer; list-style: none; border: 1px solid var(--axis); border-radius: 999px; width: 1.4em; text-align: center; }
+  .boiler-cycle .bc-explain summary::-webkit-details-marker { display: none; }
+  .boiler-cycle .bc-explain[open] { flex-basis: 100%; }
+  .boiler-cycle .bc-explain p { margin: 6px 0; }
+  .boiler-cycle .bc-line-item { font-size: 0.85rem; margin: 3px 0; }
+  .boiler-cycle .bc-line-item > b { color: var(--ink2); font-weight: 600; margin-right: 4px; }
+  .boiler-cycle .bc-columns { display: flex; gap: 8px; }
+  .boiler-cycle .bc-column { flex: 1 1 0; min-width: 0; }
+  .boiler-cycle .bc-column-head { font-size: 0.8rem; font-weight: 600; color: var(--ink2); margin-bottom: 4px; }
+  .boiler-cycle .bc-subcard { border: 1px solid color-mix(in srgb, var(--bc-c) 60%, var(--border)); border-radius: 8px; padding: 6px 8px; background: color-mix(in srgb, var(--bc-c) 5%, var(--surface)); scroll-margin-top: 12px; }
+  .boiler-cycle .bc-subcard.bc-inactive { border-style: dashed; opacity: 0.55; }
+  .boiler-cycle .bc-subcard.bc-flash { box-shadow: 0 0 0 3px color-mix(in srgb, var(--bc-c) 45%, transparent); }
+  .boiler-cycle .bc-subhead { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-bottom: 4px; }
+  .boiler-cycle .bc-subhead strong { font-size: 0.9rem; }
+  .boiler-cycle .bc-down { text-align: center; color: var(--ink2); line-height: 1; margin: 2px 0; font-size: 0.9rem; }
+  .boiler-cycle .bc-organs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px 6px; }
+  .boiler-cycle .bc-organ { min-width: 0; }
+  .boiler-cycle .bc-organ > small { display: block; font-size: 0.68rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+  .boiler-cycle .bc-off { color: var(--muted); font-size: 0.8rem; }
+  .boiler-cycle .bc-gate { font-size: 0.82rem; margin-top: 4px; padding-top: 4px; border-top: 1px dotted var(--grid); }
+  .boiler-cycle .bc-gate.bc-inactive { opacity: 0.55; }
+  .boiler-cycle .bc-gate .bc-when { color: var(--muted); margin-right: 4px; }
+  .boiler-cycle .bc-gate .bc-to { font-weight: 600; white-space: nowrap; }
+  .boiler-cycle .bc-card > footer { margin-top: 6px; }
+  .boiler-cycle .bc-more summary { cursor: pointer; font-size: 0.8rem; color: var(--muted); margin-top: 4px; }
+  .boiler-cycle .bc-matrix { border-collapse: collapse; width: 100%; margin-top: 6px; font-size: 0.8rem; }
+  .boiler-cycle .bc-matrix th, .boiler-cycle .bc-matrix td { padding: 2px 4px; border-bottom: 1px solid var(--grid); text-align: left; white-space: nowrap; }
+  .boiler-cycle .bc-matrix thead th { color: var(--ink2); text-align: center; }
+  .boiler-cycle .bc-matrix .bc-group th { color: var(--ink2); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; padding-top: 8px; }
+  .boiler-cycle .bc-matrix tr.bc-inactive td { opacity: 0.5; }
+  .boiler-cycle .bc-systems { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+  .boiler-cycle .bc-system { min-width: 0; }
+  .boiler-cycle .bc-system.bc-inactive { border-style: dashed; }
+  .boiler-cycle .bc-basis { font-size: 0.75rem; color: var(--muted); font-style: italic; }
+  .boiler-cycle .bc-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; list-style: none; padding: 0; margin: 4px 0 8px; font-size: 0.82rem; }
+  .boiler-cycle .bc-flow li { border: 1px solid var(--axis); border-radius: 8px; padding: 3px 6px; background: color-mix(in srgb, var(--bc-c) 6%, var(--surface)); }
+  .boiler-cycle .bc-flow li + li::before { content: "➜"; color: var(--ink2); margin: 0 6px 0 -2px; }
+  .boiler-cycle .bc-flow li + li { border-left: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+  .boiler-cycle .bc-acts { font-size: 0.78rem; color: var(--ink2); margin-top: 6px; }
+
+  /* Chips, badges, tags */
+  .boiler-cycle .bc-chip { display: inline-flex; align-items: baseline; gap: 3px; font: inherit; font-size: 0.8rem; line-height: 1.3; padding: 0 6px; margin: 1px 0; border: 1px solid var(--axis); border-radius: 999px; background: var(--surface); color: var(--ink); cursor: pointer; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .boiler-cycle .bc-chip b { font-weight: 600; font-size: 0.72rem; color: var(--ink2); }
+  .boiler-cycle .bc-chip:hover, .boiler-cycle .bc-chip.bc-hl { background: color-mix(in srgb, var(--warning) 35%, var(--surface)); border-color: var(--warning); }
+  .boiler-cycle .bc-chip--modified { border-color: var(--series-1); background: color-mix(in srgb, var(--series-1) 12%, var(--surface)); }
+  .boiler-cycle .bc-chip--missing { border-style: dashed; color: var(--ink2); }
+  .boiler-cycle .bc-chip--unknown { border-style: dashed; color: var(--muted); cursor: default; }
+  .boiler-cycle .bc-chip--warn { border-color: var(--critical); }
+  .boiler-cycle .bc-formula-result { font-weight: 600; white-space: nowrap; }
+  .boiler-cycle .bc-badge { display: inline-block; font-size: 0.72rem; padding: 0 6px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
+  .boiler-cycle .bc-badge.ok { border-color: var(--good); color: var(--ink); background: color-mix(in srgb, var(--good) 12%, var(--surface)); }
+  .boiler-cycle .bc-badge.ko { border-color: var(--muted); color: var(--ink2); }
+  .boiler-cycle .bc-error-tag { display: inline-block; padding: 0 6px; border-radius: 999px; font-size: 0.72rem; border: 1px solid var(--critical); margin-left: 3px; }
+  .boiler-cycle .bc-link { font: inherit; background: none; border: 0; padding: 0; color: var(--series-1); text-decoration: underline; cursor: pointer; }
+  .boiler-cycle .bc-tag { display: inline-block; padding: 0 8px; border-radius: 999px; font-size: 0.75rem; border: 1px solid var(--bc-c, var(--axis)); }
+  .boiler-cycle .bc-summary ul { margin: 0; padding-left: 18px; }
+
+  /* Parameter table, errors, dialog */
+  .boiler-cycle .bc-table td, .boiler-cycle .bc-table th { vertical-align: top; }
+  .boiler-cycle .bc-filters { align-items: end; }
+  .boiler-cycle .bc-filters label input[type=checkbox] { vertical-align: middle; }
+  .boiler-cycle tr.bc-modified td:nth-child(5) { font-weight: 600; box-shadow: inset 3px 0 0 var(--series-1); }
+  .boiler-cycle .bc-warning { border: 1px solid var(--critical); border-left-width: 5px; border-radius: 8px; padding: 10px 12px; background: color-mix(in srgb, var(--critical) 8%, var(--surface)); font-weight: 600; }
+  .boiler-cycle .bc-help-list li { margin-bottom: 8px; }
+  .boiler-cycle .bc-warn-text { color: var(--critical); }
+  .boiler-cycle .bc-req { font-size: 0.85rem; color: var(--ink2); margin-top: 2px; }
+  .boiler-cycle dialog { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--ink); width: min(640px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 16px; }
+  .boiler-cycle dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+  .boiler-cycle .bc-dialog-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+  .boiler-cycle .bc-dialog-head h2 { margin: 0; font-size: 1.1rem; }
+  .boiler-cycle dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; margin: 12px 0 0; }
+  .boiler-cycle dt { color: var(--ink2); font-size: 0.9rem; }
+  .boiler-cycle dd { margin: 0; }
+  @media (max-width: 560px) { .boiler-cycle dl { grid-template-columns: 1fr; } .boiler-cycle dt { margin-top: 6px; } .boiler-cycle .bc-card { min-width: 0; width: 100%; } .boiler-cycle .bc-columns { flex-direction: column; } }
+</style>
+
+<script>
+(function () {
+  "use strict";
+  const data = JSON.parse(document.getElementById("cycle-data").textContent);
+  const P = data.parameters;
+  const blocks = {};  // stages and parallel functions, by id
+  data.stages.forEach((stage) => { blocks[stage.id] = stage; });
+  data.systems.forEach((system) => { blocks[system.id] = Object.assign({ family: "system" }, system); });
+  const stagesById = {};
+  data.stages.forEach((stage) => { stagesById[stage.id] = stage; });
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const TOKEN = /\{([^}]+)\}|@P\((\w+)\)/g;
+  const LIVE = { oxygen: " %", exhaust: " °C", boiler: " °C", state: "" };
+
+  // --- small helpers (DOM is built with textContent only: values come from the database) ---
+
+  function el(tag, attrs, ...children) {
+    const node = document.createElement(tag);
+    Object.entries(attrs || {}).forEach(([key, value]) => {
+      if (value === null || value === undefined || value === false) { return; }
+      if (key === "text") { node.textContent = value; } else if (key === "class") { node.className = value; } else { node.setAttribute(key, value); }
+    });
+    children.forEach((child) => { if (child !== null && child !== undefined) { node.append(child); } });
+    return node;
+  }
+
+  function svg(tag, attrs) {
+    const node = document.createElementNS(SVG_NS, tag);
+    Object.entries(attrs || {}).forEach(([key, value]) => node.setAttribute(key, value));
+    return node;
+  }
+
+  const show = (value) => (value === "" || value === null || value === undefined ? "–" : String(value).replace(".", ","));
+  const unitOf = (parameter) => (parameter.unit && parameter.unit !== "nr" ? " " + parameter.unit : "");  // nr = plain number
+
+  function num(code) {
+    const parameter = P[code];
+    if (!parameter || parameter.missing || parameter.current === "") { return null; }
+    const value = Number(String(parameter.current).replace(",", "."));
+    return Number.isFinite(value) ? value : null;
+  }
+
+  function expandPower(prefix) {
+    const numbers = [3, 4, 5, 6, 7];
+    return prefix === "C2" ? numbers.map((n) => "C2" + n) : numbers.map((n) => prefix + "0" + n);
+  }
+
+  function liveText(key) {
+    const value = data.live[key];
+    if (value === null || value === undefined) { return ""; }
+    return show(Math.round(value * 100) / 100) + (LIVE[key] || "");
+  }
+
+  // Markup as plain text, for the diagram (SVG text cannot hold chips): "{T02}" -> "T02 180 s".
+  function plain(text) {
+    return (text || "")
+      .replace(/\{([^}]+)\}/g, (match, group) => group.split("+").map((part) => {
+        const code = part.trim();
+        const parameter = P[code];
+        return parameter && !parameter.missing ? code + " " + show(parameter.current) + unitOf(parameter) : code;
+      }).join(" + "))
+      .replace(/@P\((\w+)\)/g, "P1 à P5");
+  }
+
+  function constraintBroken(parameter) {
+    const rule = parameter && parameter.constraint;
+    const value = num(parameter && parameter.code);
+    return Boolean(rule && rule.multiple_of && value !== null && value % rule.multiple_of !== 0);
+  }
+
+  function labelOf(parameter) {
+    if (!parameter) { return "Paramètre absent de la base"; }
+    if (parameter.label) { return parameter.label; }
+    return parameter.description ? "(EN) " + parameter.description : "Sans description dans l'export";
+  }
+
+  // --- chips, markup, settings conditions ---
+
+  // `compact`: value only (the code stays in the tooltip), for the power matrix.
+  function chip(code, compact) {
+    const parameter = P[code];
+    if (!parameter) {
+      return el("span", { class: "bc-chip bc-chip--unknown", title: "Paramètre absent de la base", "data-code": code }, el("b", { text: code }));
+    }
+    const classes = ["bc-chip"];
+    let value;
+    if (parameter.missing) {
+      classes.push("bc-chip--missing");
+      value = compact ? "?" : "absent de l'export";
+    } else {
+      value = show(parameter.current) + unitOf(parameter);
+      if (parameter.modified) { classes.push("bc-chip--modified"); }
+      if (constraintBroken(parameter)) { classes.push("bc-chip--warn"); }
+    }
+    const button = el("button", { type: "button", class: classes.join(" "), "data-code": code,
+      title: code + " – " + labelOf(parameter) + (parameter.modified ? " (modifié, base " + show(parameter.baseline) + ")" : "") },
+      compact ? null : el("b", { text: code }), value);
+    button.addEventListener("click", () => openParameter(code));
+    return button;
+  }
+
+  // Text with {CODE}, {A+B}, {~live} and @P(XX) turned into chips.
+  function markup(text) {
+    const fragment = document.createDocumentFragment();
+    if (!text) { return fragment; }
+    let last = 0;
+    text.replace(TOKEN, (match, braces, power, offset) => {
+      fragment.append(text.slice(last, offset));
+      last = offset + match.length;
+      if (power) {
+        fragment.append(el("span", { class: "muted", text: "P1…P5" }));
+        return match;
+      }
+      if (braces.startsWith("~")) {
+        const value = liveText(braces.slice(1));
+        if (value) { fragment.append(el("strong", { text: "(" + value + ")" })); }
+        return match;
+      }
+      const codes = braces.split("+").map((part) => part.trim());
+      if (codes.length === 1) { fragment.append(chip(codes[0])); return match; }
+      const formula = el("span", { class: "bc-formula" });
+      codes.forEach((code, i) => { if (i) { formula.append(" + "); } formula.append(chip(code)); });
+      const values = codes.map(num);
+      if (values.every((value) => value !== null)) {
+        const unit = (P[codes[0]] && P[codes[0]].unit) || "";
+        const total = values.reduce((a, b) => a + b, 0);
+        formula.append(" ", el("span", { class: "bc-formula-result", text: "= " + show(Math.round(total * 100) / 100) + (unit ? " " + unit : "") }));
+      }
+      fragment.append(formula);
+      return match;
+    });
+    fragment.append(text.slice(last));
+    return fragment;
+  }
+
+  function evalReq(req) {
+    const failures = [];
+    Object.entries(req || {}).forEach(([code, allowed]) => {
+      const value = num(code);
+      if (value === null || !allowed.includes(value)) {
+        failures.push(code + " = " + (value === null ? "?" : show(value)) + " (il faudrait " + allowed.join(" ou ") + ")");
+      }
+    });
+    return { ok: failures.length === 0, failures };
+  }
+
+  const isActive = (item) => !item.req || evalReq(item.req).ok;
+
+  // Compact settings condition: "si A13 = 1", green when it holds, grey otherwise.
+  function reqTag(req) {
+    if (!req) { return null; }
+    const result = evalReq(req);
+    const text = "si " + Object.entries(req).map(([code, allowed]) => code + " = " + allowed.join("/")).join(", ");
+    return el("span", { class: "bc-badge " + (result.ok ? "ok" : "ko"), text: text + (result.ok ? " ✓" : " ✗"),
+      title: result.ok ? "actif avec les réglages actuels" : "inactif : " + result.failures.join(", "),
+      "data-codes": Object.keys(req).join(" ") });
+  }
+
+  function blockLink(id, sub) {
+    if (id === "previous") { return el("span", { text: "état précédent" }); }
+    const block = blocks[id];
+    const link = el("button", { type: "button", class: "bc-link", text: block ? block.name : id });
+    link.addEventListener("click", () => focusBlock(id));
+    return sub ? el("span", {}, link, " (" + sub + ")") : link;
+  }
+
+  function focusBlock(id, subIndex) {
+    activateTab("cycle");
+    document.querySelectorAll(".boiler-cycle .bc-node").forEach((node) => node.classList.toggle("selected", node.dataset.stage === id));
+    const chosen = subIndex === undefined ? "" : String(subIndex);
+    document.querySelectorAll(".boiler-cycle .bc-sub").forEach((node) => node.classList.toggle("selected", node.dataset.stage === id && node.dataset.sub === chosen));
+    const target = document.getElementById(subIndex === undefined ? "bc-card-" + id : "bc-sub-" + id + "-" + subIndex) || document.getElementById("bc-card-" + id);
+    if (!target) { return; }
+    history.replaceState(null, "", "#etape-" + id);
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    target.classList.add("bc-flash");
+    setTimeout(() => target.classList.remove("bc-flash"), 1600);
+  }
+
+  // --- overview diagram ---
+
+  function edgeState(from, to) {
+    if (!from) { return "unknown"; }
+    const matching = stagesById[from].transitions.filter((t) => t.target === to);
+    if (!matching.length) { return "undescribed"; }
+    return matching.some(isActive) ? "active" : "inactive";
+  }
+
+  function longestSegment(points) {
+    let best = [points[0], points[1]];
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1], b = points[i];
+      if (Math.hypot(b[0] - a[0], b[1] - a[1]) > Math.hypot(best[1][0] - best[0][0], best[1][1] - best[0][1])) { best = [a, b]; }
+    }
+    return best;
+  }
+
+  function svgText(x, y, text, attrs) {
+    const node = svg("text", Object.assign({ x, y }, attrs || {}));
+    node.textContent = text;
+    return node;
+  }
+
+  function onActivate(node, action) {
+    node.addEventListener("click", (event) => { event.stopPropagation(); action(); });
+    node.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); action(); }
+    });
+  }
+
+  function drawDiagram() {
+    const diagram = data.diagram;
+    const [width, height] = diagram.viewbox;
+    const root = svg("svg", { viewBox: `0 0 ${width} ${height}`, role: "group", "aria-label": "Schéma des étapes de la chaudière" });
+    const defs = svg("defs");
+    [["bc-arrow", "bc-arrow-head"], ["bc-arrow-dashed", "bc-arrow-head dashed"], ["bc-arrow-small", "bc-arrow-head"]].forEach(([id, cls]) => {
+      const marker = svg("marker", { id, viewBox: "0 0 10 10", refX: "9", refY: "5", markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse" });
+      marker.append(svg("path", { d: "M0,0 L10,5 L0,10 z", class: cls }));
+      defs.append(marker);
+    });
+    root.append(defs);
+
+    const labels = [];
+    diagram.edges.forEach((edge) => {
+      const state = edgeState(edge.from, edge.to);
+      const dashed = state !== "active";
+      root.append(svg("polyline", {
+        points: edge.points.map((p) => p.join(",")).join(" "),
+        class: "bc-edge" + (dashed ? " dashed" : ""),
+        "marker-end": "url(#" + (dashed ? "bc-arrow-dashed" : "bc-arrow") + ")",
+      }));
+      const lines = edge.label ? [edge.label] : [];
+      if (state === "inactive") { lines.push("inactif avec les réglages actuels"); }
+      if (state === "undescribed") { lines[0] = (lines[0] ? lines[0] + " " : "") + "(non détaillé)"; }
+      if (!lines.length) { return; }
+      let [x, y, anchor] = edge.label_at || [];
+      if (!edge.label_at) { const [a, b] = longestSegment(edge.points); x = (a[0] + b[0]) / 2 + 6; y = (a[1] + b[1]) / 2 - 6; anchor = "start"; }
+      // Inline style: a presentation attribute would lose against the stylesheet's text-anchor.
+      const text = svg("text", { x, y, style: "text-anchor: " + anchor, class: "bc-edge-label" + (dashed ? " dashed" : "") });
+      lines.forEach((line, i) => {
+        const span = svg("tspan", { x, dy: i ? "14" : "0" });
+        span.textContent = line;
+        text.append(span);
+      });
+      labels.push(text);
+    });
+
+    Object.entries(diagram.nodes).forEach(([id, box]) => {
+      const stage = stagesById[id];
+      const family = "bc-fam-" + stage.family;
+      const group = svg("g", { class: "bc-node " + family, tabindex: "0", role: "button", "data-stage": id,
+        "aria-label": stage.name + " (" + data.families[stage.family] + ")" });
+      group.append(svg("rect", { x: box.x, y: box.y, width: box.w, height: box.h, rx: 10, class: "bc-node-box" }));
+      const centre = box.x + box.w / 2;
+      if (box.subs.length) {
+        group.append(svgText(centre, box.y + diagram.header / 2 + 1, stage.name, { class: "bc-node-title" }));
+      } else {
+        const subtitle = plain(box.subtitle);
+        group.append(svgText(centre, box.y + box.h / 2 - (subtitle ? 8 : 0), stage.name, { class: "bc-node-title" }));
+        if (subtitle) { group.append(svgText(centre, box.y + box.h / 2 + 12, subtitle, { class: "bc-node-subtitle" })); }
+      }
+      onActivate(group, () => focusBlock(id));
+      root.append(group);
+
+      box.columns.forEach((column) => {
+        const subs = column.subs.map((index) => box.subs.find((sub) => sub.index === index));
+        if (column.title) {
+          const inactive = !subs.some(isActive);
+          root.append(svgText(column.x + column.w / 2, box.y + diagram.header + 10, column.title + (inactive ? " – inactif" : ""),
+            { class: "bc-column-title" + (inactive ? " dashed" : "") }));
+        }
+        subs.slice(1).forEach((sub, i) => {
+          const above = subs[i];
+          root.append(svg("line", { x1: above.x + above.w / 2, y1: above.y + above.h, x2: sub.x + sub.w / 2, y2: sub.y,
+            class: "bc-sub-arrow", "marker-end": "url(#bc-arrow-small)", "marker-start": column.loop ? "url(#bc-arrow-small)" : "none" }));
+        });
+      });
+      box.subs.forEach((sub) => {
+        const active = isActive(sub);
+        const result = sub.req ? evalReq(sub.req) : null;
+        const subGroup = svg("g", { class: "bc-sub " + family + (active ? "" : " inactive"), tabindex: "0", role: "button",
+          "data-stage": id, "data-sub": sub.index,
+          "aria-label": stage.name + " – " + sub.label + (active ? "" : " (inactif avec les réglages actuels)") });
+        const title = svg("title");
+        title.textContent = sub.label + (result && !result.ok ? " – inactif : " + result.failures.join(", ") : "");
+        subGroup.append(title, svg("rect", { x: sub.x, y: sub.y, width: sub.w, height: sub.h, rx: 7 }));
+        const middle = sub.x + sub.w / 2;
+        const duration = plain(sub.duration);
+        subGroup.append(svgText(middle, sub.y + (duration ? 15 : sub.h / 2 + 1), sub.label, { class: "bc-sub-title" }));
+        if (duration) { subGroup.append(svgText(middle, sub.y + 30, duration, { class: "bc-sub-duration" })); }
+        onActivate(subGroup, () => focusBlock(id, sub.index));
+        root.append(subGroup);
+      });
+    });
+    labels.forEach((label) => root.append(label));
+    document.getElementById("bc-diagram").append(root);
+  }
+
+  function legend(container) {
+    Object.entries(data.families).forEach(([family, name]) => {
+      container.append(el("div", { class: "bc-legend-item bc-fam-" + family }, el("span", { class: "bc-swatch" }), name));
+    });
+    container.append(
+      el("div", { class: "bc-legend-item bc-fam-system" }, el("span", { class: "bc-swatch" }), "Fonction en parallèle"),
+      el("div", { class: "bc-legend-item" }, el("span", { class: "bc-line" }), "passage possible"),
+      el("div", { class: "bc-legend-item" }, el("span", { class: "bc-line dashed" }), "inactif avec les réglages actuels / non détaillé"),
+    );
+  }
+
+  // --- detailed board ---
+
+  const ORGANS = [["V1", (s) => s.fans[0]], ["V2", (s) => s.fans[1]], ["V3", (s) => s.fans[2]],
+                  ["Vis 1", (s) => s.auger1], ["Vis 2", (s) => s.auger2], ["Bougie", (s) => s.plug]];
+
+  function organValue(value) {
+    if (Array.isArray(value)) {
+      const box = el("div");
+      value.forEach((alt) => {
+        const line = el("div", { class: isActive(alt) ? "" : "bc-inactive" });
+        if (alt.label) { line.append(el("small", { class: "muted", text: alt.label + " " })); }
+        line.append(markup(alt.value));
+        if (alt.req) { line.append(" ", reqTag(alt.req)); }
+        box.append(line);
+      });
+      return box;
+    }
+    if (value === "OFF") { return el("span", { class: "bc-off", text: "off" }); }
+    return markup(value);
+  }
+
+  function gate(t) {
+    const node = el("div", { class: "bc-gate" + (isActive(t) ? "" : " bc-inactive") });
+    if (t.when) { node.append(el("span", { class: "bc-when" }, markup(t.when))); }
+    if (t.condition) { node.append(markup(t.condition), " "); }
+    const target = t.target === "previous" ? el("span", { text: "état précédent" }) : blockLink(t.target);
+    node.append(el("span", { class: "bc-to" }, "➜ ", target), t.sub ? " (" + t.sub + ")" : "");
+    if (t.note) { node.append(" ", markup(t.note)); }
+    if (t.error) { node.append(el("span", { class: "bc-error-tag", text: t.error })); }
+    if (t.req) { node.append(" ", reqTag(t.req)); }
+    return node;
+  }
+
+  // Gates of a stage footer: active ones shown, inactive ones folded away.
+  function gateList(transitions) {
+    const box = el("div");
+    const inactive = transitions.filter((t) => !isActive(t));
+    transitions.filter(isActive).forEach((t) => box.append(gate(t)));
+    if (inactive.length) {
+      const more = el("details", { class: "bc-more" }, el("summary", { text: inactive.length + " passage(s) inactif(s) avec les réglages actuels" }));
+      inactive.forEach((t) => more.append(gate(t)));
+      box.append(more);
+    }
+    return box;
+  }
+
+  function subCard(stage, sub, index, single) {
+    const card = el("div", { class: "bc-subcard" + (isActive(sub) ? "" : " bc-inactive"), id: "bc-sub-" + stage.id + "-" + index });
+    const head = el("div", { class: "bc-subhead" });
+    if (!single) { head.append(el("strong", { text: sub.short || sub.name })); }
+    if (sub.duration) { head.append("⏱ ", markup(sub.duration)); }
+    if (sub.req) { head.append(reqTag(sub.req)); }
+    if (head.childNodes.length) { card.append(head); }
+    const values = ORGANS.map(([, pick]) => pick(sub));
+    if (values.every((value) => value === "OFF")) {
+      card.append(el("div", { class: "bc-off", text: "tout à l'arrêt (ventilateurs, vis, bougie)" }));
+    } else if (values.slice(0, 5).every((value) => typeof value === "string" && value.startsWith("@P"))) {
+      // Power steps: the values are in the matrix of the Normal stage.
+      card.append(el("div", { class: "bc-line-item" }, "Ventilateurs et vis au palier en cours : ",
+        stage.matrix ? "voir la matrice ci-dessous" : blockLink("normal", "matrice P1–P5"), " · bougie off"));
+    } else {
+      const organs = el("div", { class: "bc-organs" });
+      ORGANS.forEach(([label, pick]) => organs.append(el("div", { class: "bc-organ" }, el("small", { text: label }), organValue(pick(sub)))));
+      card.append(organs);
+    }
+    stage.transitions.filter((t) => t.at === index).forEach((t) => card.append(gate(t)));
+    return card;
+  }
+
+  function matrix(rows) {
+    const table = el("table", { class: "bc-matrix" });
+    table.append(el("thead", {}, el("tr", {}, el("th"), ...["P1", "P2", "P3", "P4", "P5"].map((p) => el("th", { text: p })))));
+    const body = el("tbody");
+    let group = "";
+    rows.forEach((row) => {
+      if (row.group !== group) {
+        group = row.group;
+        body.append(el("tr", { class: "bc-group" }, el("th", { colspan: "6", text: group })));
+      }
+      const label = el("td", {}, row.label, row.req ? el("span", {}, " ", reqTag(row.req)) : null);
+      body.append(el("tr", { class: isActive(row) ? "" : "bc-inactive" }, label,
+        ...row.cells.map((cell) => el("td", {}, chip(cell.replace(/[{}]/g, ""), true)))));
+    });
+    table.append(body);
+    return el("div", { class: "table-wrap" }, table);
+  }
+
+  function explain(block) {
+    const details = el("details", { class: "bc-explain" }, el("summary", { text: "?", title: "En clair", "aria-label": "En clair" }));
+    if (block.summary) { details.append(el("p", { text: block.summary })); }
+    (block.notes || []).forEach((note) => details.append(el("p", { class: "muted", text: "Non précisé : " + note })));
+    if (block.basis) { details.append(el("p", { class: "bc-basis", text: "Source : " + block.basis + "." })); }
+    return details;
+  }
+
+  function stageCard(stage) {
+    const card = el("article", { class: "bc-card bc-fam-" + stage.family, id: "bc-card-" + stage.id, "data-block": stage.id });
+    card.append(el("header", {}, el("h3", { text: stage.name }), explain(stage)));
+    if (stage.entry) { card.append(el("div", { class: "bc-line-item" }, markup(stage.entry))); }
+    (stage.also || []).forEach((item) => card.append(el("div", { class: "bc-line-item" + (isActive(item) ? "" : " bc-inactive") },
+      el("b", { text: item.label }), markup(item.value), " ", reqTag(item.req))));
+
+    const single = stage.substeps.length === 1;
+    const node = data.diagram.nodes[stage.id];
+    const columns = node.columns.length ? node.columns : [{ subs: stage.substeps.map((s, i) => i), title: "", loop: false }];
+    const wrap = el("div", { class: "bc-columns" });
+    columns.forEach((column) => {
+      const col = el("div", { class: "bc-column" });
+      if (column.title) { col.append(el("div", { class: "bc-column-head", text: column.title })); }
+      column.subs.forEach((index, i) => {
+        if (i) { col.append(el("div", { class: "bc-down", text: column.loop ? "⇅" : "↓", "aria-hidden": "true" })); }
+        col.append(subCard(stage, stage.substeps[index], index, single));
+      });
+      wrap.append(col);
+    });
+    card.append(wrap);
+    if (stage.matrix) { card.append(matrix(stage.matrix)); }
+    const footer = stage.transitions.filter((t) => t.at === undefined);
+    if (footer.length) { card.append(el("footer", {}, gateList(footer))); }
+    return card;
+  }
+
+  function systemCard(system) {
+    const card = el("article", { class: "bc-card bc-system bc-fam-system" + (isActive(system) ? "" : " bc-inactive"),
+      id: "bc-card-" + system.id, "data-block": system.id, "data-acts": system.acts_on.join(" ") });
+    card.append(el("header", {}, el("h3", { text: system.name }), system.req ? reqTag(system.req) : null, explain(system)));
+    if (system.flow) { card.append(el("ol", { class: "bc-flow" }, ...system.flow.map((step) => el("li", {}, markup(step))))); }
+    (system.rows || []).forEach(([label, value]) => card.append(el("div", { class: "bc-line-item" }, el("b", { text: label }), markup(value))));
+    if (system.acts_on.length) {
+      const acts = el("div", { class: "bc-acts" }, "Agit pendant : ");
+      system.acts_on.forEach((id, i) => { if (i) { acts.append(", "); } acts.append(blockLink(id)); });
+      card.append(acts);
+    }
+    return card;
+  }
+
+  function connector(a, b) {
+    const forward = edgeState(a, b), backward = edgeState(b, a);
+    const has = (state) => state === "active" || state === "inactive";
+    if (!has(forward) && !has(backward)) { return null; }
+    const symbol = has(forward) && has(backward) ? "⇄" : has(forward) ? "➜" : "⬅";
+    const active = forward === "active" || backward === "active";
+    return el("span", { class: "bc-connector" + (active ? "" : " dashed"), text: symbol, "aria-hidden": "true",
+      title: active ? "" : "inactif avec les réglages actuels" });
+  }
+
+  function drawBoard() {
+    const board = document.getElementById("bc-board");
+    data.board.forEach((row) => {
+      board.append(el("h2", { class: "bc-row-title", text: row.title }));
+      const line = el("div", { class: "bc-row" });
+      row.items.forEach((id, i) => {
+        if (i) { const link = connector(row.items[i - 1], id); if (link) { line.append(link); } }
+        line.append(stageCard(stagesById[id]));
+      });
+      board.append(line);
+    });
+    board.append(el("h2", { class: "bc-row-title", text: "Fonctions en parallèle" }));
+    board.append(el("div", { class: "bc-systems" }, ...data.systems.map(systemCard)));
+    if (data.unplaced.length) {
+      const others = el("article", { class: "bc-card bc-fam-system", id: "bc-card-others" },
+        el("header", {}, el("h3", { text: "Autres paramètres (non placés dans le schéma)" })));
+      others.append(el("div", { class: "bc-line-item" }, ...data.unplaced.map((code) => el("span", {}, chip(code), " "))));
+      board.append(el("h2", { class: "bc-row-title", text: "Autres" }), others);
+    }
+
+    // Interactions: a parameter lights up everywhere it appears; a parallel function
+    // lights up the stages it works in.
+    const root = document.querySelector(".boiler-cycle");
+    root.addEventListener("mouseover", (event) => {
+      const target = event.target.closest("[data-code], [data-codes], .bc-system");
+      if (!target) { return; }
+      const codes = target.dataset.code ? [target.dataset.code] : (target.dataset.codes || "").split(" ").filter(Boolean);
+      codes.forEach((code) => root.querySelectorAll('.bc-chip[data-code="' + code + '"]').forEach((node) => node.classList.add("bc-hl")));
+      if (target.classList.contains("bc-system")) {
+        target.dataset.acts.split(" ").filter(Boolean).forEach((id) => {
+          const card = document.getElementById("bc-card-" + id);
+          if (card) { card.classList.add("bc-hl-card"); }
+        });
+      }
+    });
+    root.addEventListener("mouseout", () => {
+      root.querySelectorAll(".bc-hl").forEach((node) => node.classList.remove("bc-hl"));
+      root.querySelectorAll(".bc-hl-card").forEach((node) => node.classList.remove("bc-hl-card"));
+    });
+  }
+
+  function drawLive() {
+    if (!data.live.time) { return; }
+    const parts = [["fumées", "exhaust"], ["chaudière", "boiler"], ["O₂", "oxygen"], ["état", "state"]]
+      .filter(([, key]) => liveText(key)).map(([name, key]) => name + " " + liveText(key));
+    document.getElementById("bc-live").textContent = "Dernière mesure (" + data.live.time + ") : " + parts.join(" · ");
+  }
+
+  // --- parameter dialog ---
+
+  const dialog = document.getElementById("bc-dialog");
+  document.getElementById("bc-dialog-close").addEventListener("click", () => dialog.close());
+  dialog.addEventListener("click", (event) => { if (event.target === dialog) { dialog.close(); } });
+
+  function openParameter(code) {
+    const parameter = P[code];
+    if (!parameter) { return; }
+    document.getElementById("bc-dialog-title").textContent = code + " – " + labelOf(parameter);
+    const list = el("dl");
+    const add = (term, ...content) => list.append(el("dt", { text: term }), el("dd", {}, ...content));
+    if (parameter.description) { add(parameter.missing ? "Description" : "Texte d'origine (EN)", parameter.description); }
+    if (parameter.section) { add("Section", parameter.section); }
+    add("Unité", parameter.unit || "–");
+    if (parameter.missing) {
+      add("Valeur", "valeur absente de l'export");
+    } else {
+      add("Valeur", show(parameter.baseline) + " → " + show(parameter.current) + (parameter.modified ? " (modifié)" : " (inchangé)"));
+      add("Changements", parameter.change_count ? parameter.change_count + ", le dernier le " + parameter.last_change : "aucun");
+    }
+    const where = el("span");
+    parameter.stages.forEach((id, i) => { if (i) { where.append(", "); } where.append(blockLink(id)); });
+    add("Où il intervient", parameter.stages.length ? where : "placé nulle part dans le schéma");
+    add("Impact", parameter.impact || "–");
+    if (parameter.constraint) {
+      const rule = el("span", {}, parameter.constraint.text);
+      if (parameter.constraint.hint) { rule.append(el("br"), el("span", { class: "muted", text: parameter.constraint.hint })); }
+      if (constraintBroken(parameter)) { rule.append(el("br"), el("strong", { class: "bc-warn-text", text: "Attention : la valeur actuelle ne respecte pas cette contrainte." })); }
+      add("Contrainte de valeur", rule);
+    }
+    document.getElementById("bc-dialog-body").replaceChildren(list);
+    if (typeof dialog.showModal === "function") { if (!dialog.open) { dialog.showModal(); } } else { dialog.setAttribute("open", ""); }
+  }
+
+  // --- parameter table ---
+
+  function drawParameters() {
+    const codes = Object.keys(P).sort((a, b) => a.localeCompare(b, "fr", { numeric: true }));
+    const sections = [...new Set(codes.map((code) => P[code].section).filter(Boolean))].sort((a, b) => a.localeCompare(b, "fr"));
+    const select = document.getElementById("bc-section");
+    sections.forEach((section) => select.append(el("option", { value: section, text: section })));
+    const body = document.getElementById("bc-params-body");
+    codes.forEach((code) => {
+      const parameter = P[code];
+      const name = el("td", {}, labelOf(parameter));
+      if (parameter.constraint) {
+        name.append(" ", el("span", { class: "bc-badge " + (constraintBroken(parameter) ? "ko" : "ok"), text: parameter.constraint.text + (constraintBroken(parameter) ? " : non respecté" : "") }));
+      }
+      const where = el("td");
+      parameter.stages.forEach((id, i) => { if (i) { where.append(", "); } where.append(blockLink(id)); });
+      const codeButton = el("button", { type: "button", class: "bc-link", text: code });
+      codeButton.addEventListener("click", () => openParameter(code));
+      body.append(el("tr", { class: parameter.modified ? "bc-modified" : "", "data-section": parameter.section,
+        "data-modified": parameter.modified ? "1" : "0",
+        "data-search": (code + " " + labelOf(parameter) + " " + parameter.description).toLowerCase() },
+        el("td", {}, codeButton), name, el("td", { text: parameter.unit || "" }),
+        el("td", { text: parameter.missing ? "–" : show(parameter.baseline) }),
+        el("td", { text: parameter.missing ? "valeur absente de l'export" : show(parameter.current) }), where));
+    });
+
+    const search = document.getElementById("bc-search");
+    const onlyModified = document.getElementById("bc-modified");
+    const count = document.getElementById("bc-count");
+    function filter() {
+      const words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      let shown = 0;
+      body.querySelectorAll("tr").forEach((row) => {
+        const match = words.every((word) => row.dataset.search.includes(word))
+          && (!select.value || row.dataset.section === select.value)
+          && (!onlyModified.checked || row.dataset.modified === "1");
+        row.hidden = !match;
+        shown += match ? 1 : 0;
+      });
+      count.textContent = shown + " paramètre(s) affiché(s) sur " + codes.length + ".";
+    }
+    [search, select, onlyModified].forEach((input) => input.addEventListener("input", filter));
+    filter();
+  }
+
+  // --- errors and help ---
+
+  function drawErrors() {
+    const body = document.getElementById("bc-errors-body");
+    data.errors.forEach((error) => {
+      const stages = el("td");
+      error.stages.forEach((id, i) => { if (i) { stages.append(", "); } stages.append(blockLink(id)); });
+      if (!error.stages.length) { stages.append(el("span", { class: "muted", text: "non précisé" })); }
+      const params = el("td", {}, ...error.params.map((code) => el("span", {}, chip(code), " ")));
+      if (error.flag && num(error.flag) === 0) {
+        params.append(el("div", { class: "bc-req", text: "Gestion de cette erreur désactivée (" + error.flag + " = 0)." }));
+      }
+      body.append(el("tr", {}, el("td", {}, el("strong", { text: error.code })), el("td", { text: error.label }), stages, params));
+    });
+    document.getElementById("bc-errors-note").textContent = data.errors_note;
+    document.getElementById("bc-lambda-warning").textContent = "⚠ " + data.lambda_warning;
+    const lambda = document.getElementById("bc-lambda-body");
+    data.lambda_errors.forEach((error) => {
+      lambda.append(el("tr", {}, el("td", {}, el("strong", { text: error.code })), el("td", { text: error.label }), el("td", { text: error.fix })));
+    });
+  }
+
+  function drawHelp() {
+    const families = document.getElementById("bc-families-body");
+    data.code_families.forEach(([codes, text]) => families.append(el("tr", {}, el("th", { text: codes }), el("td", { text }))));
+    const sample = Object.values(P).find((p) => !p.missing && !p.modified);
+    const modified = Object.values(P).find((p) => p.modified);
+    document.getElementById("bc-help-chips").append(
+      el("li", {}, "Chip = paramètre (code et valeur actuelle). Clic : sa fiche. Survol : toutes ses apparitions s'allument. ", sample ? chip(sample.code) : null),
+      el("li", {}, "Bordure bleue : différent de la valeur de base. ", modified ? chip(modified.code) : null),
+      el("li", {}, "Pointillé : cité par le document mais absent de l'export. ", P.TH24 ? chip("TH24") : null),
+      el("li", {}, "Formule : additionnée avec les valeurs actuelles, par ex. ", markup("{TH06+D01}"), "."),
+      el("li", {}, "Condition de réglage : ", el("span", { class: "bc-badge ok", text: "si … ✓" }), " active, ",
+        el("span", { class: "bc-badge ko", text: "si … ✗" }), " inactive (élément estompé, ou replié dans « passages inactifs »)."),
+      el("li", {}, "➜ dans une étape : passage vers une autre étape, avec sa condition. ⏱ : durée."),
+      el("li", {}, "Matrice de l'étape Normal : tout ce qui dépend du palier P1 à P5, côte à côte."),
+      el("li", {}, "Fonctions en parallèle : survoler un bloc allume les étapes où il agit."),
+    );
+    legend(document.getElementById("bc-help-legend"));
+    const shadows = document.getElementById("bc-shadows");
+    data.shadows.forEach((text) => shadows.append(el("li", { text })));
+  }
+
+  // --- tabs ---
+
+  const tabs = ["cycle", "params", "errors", "help"];
+  function activateTab(name) {
+    tabs.forEach((tab) => {
+      const button = document.getElementById("bc-tab-" + tab);
+      const selected = tab === name;
+      button.setAttribute("aria-selected", selected ? "true" : "false");
+      button.tabIndex = selected ? 0 : -1;
+      document.getElementById("bc-panel-" + tab).hidden = !selected;
+    });
+    if (dialog.open) { dialog.close(); }
+  }
+  tabs.forEach((tab, index) => {
+    const button = document.getElementById("bc-tab-" + tab);
+    button.addEventListener("click", () => activateTab(tab));
+    button.addEventListener("keydown", (event) => {
+      const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+      if (!step) { return; }
+      const next = tabs[(index + step + tabs.length) % tabs.length];
+      activateTab(next);
+      document.getElementById("bc-tab-" + next).focus();
+    });
+  });
+
+  // --- start ---
+
+  drawDiagram();
+  legend(document.getElementById("bc-legend"));
+  drawLive();
+  drawBoard();
+  data.summary.forEach((line) => document.getElementById("bc-summary").append(el("li", { text: line })));
+  drawParameters();
+  drawErrors();
+  drawHelp();
+  const fromHash = location.hash.startsWith("#etape-") ? location.hash.slice(7) : "";
+  if (blocks[fromHash]) { focusBlock(fromHash); }
+})();
+</script>
+{% endblock %}

@@ -176,7 +176,7 @@ class ViewTests(TestCase):
         make_parameter("UC01", "30", description="Ventilateur, puissance")
 
     def test_pages_require_a_login(self):
-        for name in ("status", "timeline", "startups", "compare_days", "faults", "journal", "parameters",
+        for name in ("status", "timeline", "startups", "compare_days", "faults", "journal", "parameters", "boiler_cycle",
                      "timeline_export", "parameters_export", "changes_export"):
             response = self.client.get(reverse(name))
             self.assertEqual(response.status_code, 302, name)
@@ -185,7 +185,7 @@ class ViewTests(TestCase):
     def test_all_pages_render_when_logged_in(self):
         self.client.force_login(self.user)
         day = START.date().isoformat()
-        for name in ("status", "timeline", "startups", "compare_days", "faults", "journal", "parameters"):
+        for name in ("status", "timeline", "startups", "compare_days", "faults", "journal", "parameters", "boiler_cycle"):
             response = self.client.get(reverse(name), {"from": day, "to": day})
             self.assertEqual(response.status_code, 200, name)
             # A template comment that leaks into the page (e.g. a multi-line {# #}).
@@ -230,6 +230,18 @@ class ViewTests(TestCase):
         self.client.force_login(self.user)
         response = self.client.get(reverse("compare_days"))
         self.assertEqual([d["date"] for d in response.context["days"]], [START.date().isoformat()])
+
+    def test_boiler_cycle_shows_the_current_values_from_the_database(self):
+        self.client.force_login(self.user)
+        parameter = Parameter.objects.get(code="UC01")
+        SettingChange.objects.create(parameter=parameter, timestamp=START, new_value="60")
+        response = self.client.get(reverse("boiler_cycle"))
+        self.assertEqual(response.status_code, 200)
+        uc01 = response.context["cycle"]["parameters"]["UC01"]
+        self.assertEqual((uc01["baseline"], uc01["current"], uc01["modified"]), ("30", "60", True))
+        self.assertIn("ignition", uc01["stages"])
+        self.assertTrue(response.context["cycle"]["parameters"]["TH24"]["missing"])
+        self.assertContains(response, 'id="cycle-data"')
 
     def csv_lines(self, response):
         self.assertTrue(response.content.startswith(b"\xef\xbb\xbf"))  # BOM, for Excel

@@ -16,6 +16,7 @@ urlpatterns = [
     path("parametres/", views.parameters, name="parameters"),
     path("parametres/export.csv", views.parameters_export, name="parameters_export"),
     path("parametres/historique.csv", views.changes_export, name="changes_export"),
+    path("cycle/", views.boiler_cycle, name="boiler_cycle"),
     path("assets/plotly.min.js", views.plotly_js, name="plotly_js"),
     path(
         "connexion/",
