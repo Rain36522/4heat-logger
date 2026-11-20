@@ -6,6 +6,16 @@ from pathlib import Path
 # Read-all query. This is the only message the logger ever sends to the module.
 READ_ALL_QUERY = b'["SEL","0"]'
 
+# Write commands (["SEC", ...]), sent only by the control features of the web app, the bot
+# and the clock, never by the logger. Frames from xcrittpm/ha-redpod-4heat and
+# leoshusar/4heat-esphome; the ids below were checked against this module's answer.
+TURN_ON_ID = "30253"  # J30253000000000001
+TURN_OFF_ID = "30254"  # J30254000000000001
+BOILER_TARGET_ID = "20180"  # B20180 in the answer: writable boiler target, degC
+# B20005 = 30 and B20006 = 75 in the answer: very likely the allowed range of the target.
+BOILER_TARGET_MIN_ID = "20005"
+BOILER_TARGET_MAX_ID = "20006"
+
 # Id of the boiler state, used to decide whether the boiler is running.
 STATE_ID = "30001"
 
@@ -40,5 +50,5 @@ class Settings:
     read_attempts: int = 3  # reads tried before the module is considered unreachable
     retry_delay: float = 5.0  # seconds between two read attempts
     presence_interval: float = 90.0  # seconds between checks while unreachable or at rest
-    record_interval: float = 40.0  # seconds between readings while the boiler runs
+    record_interval: float = 60.0  # seconds between readings while the boiler runs (the module drops out when read too often)
     output: Path = Path("4heat_log.csv")

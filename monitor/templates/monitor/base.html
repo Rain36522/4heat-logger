@@ -64,6 +64,7 @@
     th { color: var(--ink2); font-weight: 600; font-size: 0.85rem; }
     .messages { list-style: none; padding: 0; margin: 0 0 12px; }
     .messages li { padding: 10px 12px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--good); margin-bottom: 6px; }
+    .messages li.error { border-left-color: var(--critical); }
     .scale { display: flex; align-items: center; gap: 8px; color: var(--ink2); font-size: 0.85rem; margin: 8px 0; }
     .scale .bar { width: 140px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--ramp0), var(--ramp2), var(--ramp5)); }
     .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; }
@@ -77,8 +78,9 @@
   <header>
     <nav aria-label="Navigation principale">
       {% url 'status' as url_status %}{% url 'timeline' as url_timeline %}{% url 'startups' as url_startups %}
-      {% url 'faults' as url_faults %}{% url 'journal' as url_journal %}{% url 'parameters' as url_parameters %}{% url 'compare_days' as url_compare %}{% url 'boiler_cycle' as url_cycle %}
+      {% url 'faults' as url_faults %}{% url 'journal' as url_journal %}{% url 'parameters' as url_parameters %}{% url 'compare_days' as url_compare %}{% url 'boiler_cycle' as url_cycle %}{% url 'control' as url_control %}
       <a href="{{ url_status }}" {% if request.path == url_status %}aria-current="page"{% endif %}>Statut</a>
+      <a href="{{ url_control }}" {% if request.path == url_control %}aria-current="page"{% endif %}>Pilotage</a>
       <a href="{{ url_timeline }}" {% if request.path == url_timeline %}aria-current="page"{% endif %}>Graphes</a>
       <a href="{{ url_startups }}" {% if request.path == url_startups %}aria-current="page"{% endif %}>Démarrages</a>
       <a href="{{ url_compare }}" {% if request.path == url_compare %}aria-current="page"{% endif %}>Comparer</a>
@@ -94,7 +96,7 @@
     </nav>
   </header>
   <main>
-    {% if messages %}<ul class="messages">{% for message in messages %}<li>{{ message }}</li>{% endfor %}</ul>{% endif %}
+    {% if messages %}<ul class="messages">{% for message in messages %}<li class="{{ message.tags }}" role="{% if message.tags == 'error' %}alert{% else %}status{% endif %}">{{ message }}</li>{% endfor %}</ul>{% endif %}
     {% block content %}{% endblock %}
   </main>
 </body>

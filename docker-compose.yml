@@ -23,7 +23,7 @@ services:
     environment:
       TZ: Europe/Zurich
     volumes:
-      - ${HEATING_CSV_DIR:-./data}:/data          # writes 4heat_log.csv; web and telegram-com mount it read-only
+      - ${HEATING_CSV_DIR:-./data}:/data          # writes 4heat_log.csv; the other services mount it read-only
 
   telegram-com:
     build: .
@@ -41,3 +41,23 @@ services:
       - ${HEATING_CSV_DIR:-./data}:/data:ro
     depends_on:
       - web
+
+  pilote:
+    build: .
+    restart: unless-stopped
+    # Sends the queued commands (web page, bot, clock) to the module, one at a time.
+    command: python manage.py run_pilot
+    environment:
+      HEATING_CSV_PATH: /data/4heat_log.csv       # to start commands between two collector reads
+      DJANGO_DB_DIR: /app/db
+      DATABASE_URL: ${DATABASE_URL:-}
+      FOURHEAT_HOST: ${FOURHEAT_HOST:-192.168.1.182}
+      FOURHEAT_PORT: ${FOURHEAT_PORT:-80}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}   # optional: results of bot commands, clock notices
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TZ: Europe/Zurich
+    volumes:
+      - ./db:/app/db
+      - ${HEATING_CSV_DIR:-./data}:/data:ro
+    depends_on:
+      - web                                       # web applies the migrations

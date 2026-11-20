@@ -3,6 +3,7 @@ import re
 from django.db import models
 from django.utils import timezone
 
+from .core import control
 from .core.journal import ChangeRecord, current_value, format_value, value_before
 
 
@@ -120,5 +121,110 @@ class AlertState(models.Model):
 
     @classmethod
     def load(cls) -> "AlertState":
+        row, _ = cls.objects.get_or_create(pk=1)
+        return row
+
+
+DAY_CHOICES = [(index, name.capitalize()) for index, name in enumerate(control.DAY_NAMES)]
+
+
+class ScheduleSlot(models.Model):
+    """When the clock runs the heating, every week (or every day when no day is given)."""
+
+    start_day = models.PositiveSmallIntegerField("jour de début", choices=DAY_CHOICES, null=True, blank=True)
+    start_time = models.TimeField("heure de début")
+    end_day = models.PositiveSmallIntegerField("jour de fin", choices=DAY_CHOICES, null=True, blank=True)
+    end_time = models.TimeField("heure de fin")
+
+    class Meta:
+        ordering = ["start_day", "start_time"]
+        verbose_name = "plage horaire"
+        verbose_name_plural = "plages horaires"
+
+    def __str__(self):
+        return self.as_core().describe()
+
+    def as_core(self) -> control.Slot:
+        return control.Slot(self.start_day, self.start_time, self.end_day, self.end_time)
+
+
+class DayOff(models.Model):
+    """Holiday or leave: the clock keeps the heating off for these whole days."""
+
+    first_day = models.DateField("du")
+    last_day = models.DateField("au")
+    label = models.CharField("motif", max_length=100, blank=True)
+
+    class Meta:
+        ordering = ["first_day"]
+        verbose_name = "jour de congé"
+        verbose_name_plural = "jours de congé"
+
+    def __str__(self):
+        span = f"{self.first_day:%d.%m.%Y}"
+        if self.last_day != self.first_day:
+            span += f" → {self.last_day:%d.%m.%Y}"
+        return f"{span} {self.label}".strip()
+
+    def as_core(self) -> control.DayOff:
+        return control.DayOff(self.first_day, self.last_day)
+
+
+class CommandLog(models.Model):
+    """Queue and history of the commands to the heating: the web page, the bot and the clock
+    only add rows; the pilot service sends them one at a time and writes the result."""
+
+    class Source(models.TextChoices):
+        WEB = "web", "Page web"
+        TELEGRAM = "telegram", "Telegram"
+        CLOCK = "clock", "Horloge"
+
+    class Action(models.TextChoices):
+        ON = "on", "Marche"
+        OFF = "off", "Arrêt"
+        TARGET = "target", "Consigne chaudière"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "En attente"
+        DONE = "done", "Faite"
+        FAILED = "failed", "Échec"
+        CANCELLED = "cancelled", "Remplacée"
+
+    timestamp = models.DateTimeField("demandée le", default=now_local, db_index=True)
+    source = models.CharField("origine", max_length=16, choices=Source.choices)
+    action = models.CharField("commande", max_length=16, choices=Action.choices)
+    value = models.IntegerField("valeur", null=True, blank=True)
+    status = models.CharField("statut", max_length=16, choices=Status.choices, default=Status.PENDING, db_index=True)
+    attempts = models.PositiveSmallIntegerField("essais", default=0)
+    next_try_at = models.DateTimeField("prochain essai", null=True, blank=True)
+    finished_at = models.DateTimeField("terminée le", null=True, blank=True)
+    detail = models.CharField("détail", max_length=300, blank=True)
+
+    class Meta:
+        ordering = ["-timestamp", "-id"]
+        verbose_name = "commande"
+        verbose_name_plural = "commandes"
+
+    def __str__(self):
+        return f"{self.timestamp:%d.%m %H:%M} {self.describe()} ({self.get_source_display()})"
+
+    def describe(self) -> str:
+        value = f" {self.value} °C" if self.value is not None else ""
+        return f"{self.get_action_display()}{value}"
+
+
+class ClockState(models.Model):
+    """Clock switch and what it decided last (a single row)."""
+
+    enabled = models.BooleanField("horloge active", default=False)
+    # Wanted state already applied (None = not known yet: the next pass only records it).
+    last_wanted = models.BooleanField(null=True, blank=True)
+    # Command the clock put in the queue and is waiting for.
+    command = models.ForeignKey(CommandLog, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    # Last failure of the pending change: retried later, reported once.
+    failed_at = models.DateTimeField(null=True, blank=True)
+
+    @classmethod
+    def load(cls) -> "ClockState":
         row, _ = cls.objects.get_or_create(pk=1)
         return row

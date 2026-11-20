@@ -127,6 +127,9 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 HEATING_CSV_PATH = os.environ.get("HEATING_CSV_PATH", str(BASE_DIR / "data" / "4heat_log.csv"))
 # The status page says "running" when the last reading is younger than this.
 STATUS_LIVE_MAX_AGE_S = 180
+# 4HEAT module, for the queued commands (on / off, boiler target) sent by the pilot service.
+FOURHEAT_HOST = os.environ.get("FOURHEAT_HOST", "192.168.1.182")
+FOURHEAT_PORT = int(os.environ.get("FOURHEAT_PORT", "80"))
 # Telegram alerts (python manage.py run_alerts). Both must be set to enable them.
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")

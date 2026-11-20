@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import CodeLabel, Parameter, SettingChange
+from .models import CodeLabel, CommandLog, DayOff, Parameter, ScheduleSlot, SettingChange
 
 admin.site.site_header = "Chauffage — administration"
 admin.site.site_title = "Chauffage"
@@ -34,3 +34,27 @@ class SettingChangeAdmin(admin.ModelAdmin):
 class CodeLabelAdmin(admin.ModelAdmin):
     list_display = ("kind", "code", "name")
     list_filter = ("kind",)
+
+
+admin.site.register(ScheduleSlot)
+
+
+@admin.register(DayOff)
+class DayOffAdmin(admin.ModelAdmin):
+    list_display = ("first_day", "last_day", "label")
+    date_hierarchy = "first_day"
+
+
+@admin.register(CommandLog)
+class CommandLogAdmin(admin.ModelAdmin):
+    """Read-only: the log is the record of what was really sent."""
+
+    list_display = ("timestamp", "source", "action", "value", "status", "attempts", "finished_at", "detail")
+    list_filter = ("status", "source", "action")
+    date_hierarchy = "timestamp"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False

@@ -8,15 +8,17 @@ from functools import lru_cache
 from django.conf import settings
 from django.contrib import messages
 from django.http import HttpResponse, JsonResponse
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.cache import cache_control
+from django.views.decorators.http import require_POST
 
+from . import heating
 from .core import boiler_cycle as boiler_cycle_data
-from .core import charts
+from .core import charts, control
 from .core import readings as rd
 from .core.exports import CSV_CONTENT_TYPE, as_number, build_csv
-from .forms import SettingChangeForm
-from .models import CodeLabel, Parameter, SettingChange
+from .forms import BoilerTargetForm, DayOffForm, ScheduleSlotForm, SettingChangeForm
+from .models import ClockState, CodeLabel, CommandLog, DayOff, Parameter, ScheduleSlot, SettingChange
 
 METRIC_CHOICES = [(key, label) for key, (label, _unit, _fmt) in charts.METRICS.items()]
 
@@ -434,6 +436,110 @@ def changes_export(request):
     changes = SettingChange.objects.select_related("parameter").order_by("timestamp", "id")
     content = build_csv(CHANGE_HEADERS, _change_rows(changes))
     return _csv_response(content, f"historique_reglages_{datetime.now():%Y-%m-%d}.csv")
+
+
+def control_page(request, target_form=None, slot_form=None, day_off_form=None):
+    """On / off, boiler target, clock slots and days off."""
+    readings = _load_readings()
+    current = None
+    if not readings.empty:
+        state = rd.last_valid(readings, "state")[0]
+        state = None if state is None else int(state)
+        last_stamp = readings["timestamp"].iloc[-1]
+        current = {
+            "state": state,
+            "state_name": CodeLabel.labels(CodeLabel.Kind.STATE).get(state, ""),
+            "target": _show(rd.last_valid(readings, "boiler_target_temp")[0]),
+            "age_text": _age_text((datetime.now() - last_stamp.to_pydatetime()).total_seconds()),
+        }
+
+    now = datetime.now()
+    clock = ClockState.load()
+    slots, days_off = heating.clock_plan()
+    return render(
+        request,
+        "monitor/control.html",
+        {
+            "current": current,
+            "target_form": target_form or BoilerTargetForm(),
+            "target_range": control.DEFAULT_TARGET_RANGE,
+            "clock": clock,
+            "wanted_now": control.wanted_on(now, slots, days_off),
+            "next_change": control.describe_change(control.next_change(now, slots, days_off)),
+            "slots": ScheduleSlot.objects.all(),
+            "slot_form": slot_form or ScheduleSlotForm(),
+            "days_off": DayOff.objects.filter(last_day__gte=now.date()),
+            "day_off_form": day_off_form or DayOffForm(),
+            "commands": CommandLog.objects.all()[:15],
+            "has_pending": CommandLog.objects.filter(status=CommandLog.Status.PENDING).exists(),
+        },
+    )
+
+
+def _queue(request, action, value=None):
+    command = heating.enqueue(action, CommandLog.Source.WEB, value)
+    messages.success(request, f"{command.describe()} : commande en file, résultat ci-dessous dans « Dernières commandes ».")
+    return redirect("control")
+
+
+@require_POST
+def control_power(request, action):
+    return _queue(request, action)
+
+
+@require_POST
+def control_target(request):
+    form = BoilerTargetForm(request.POST)
+    if not form.is_valid():
+        return control_page(request, target_form=form)
+    return _queue(request, CommandLog.Action.TARGET, form.cleaned_data["value"])
+
+
+@require_POST
+def clock_toggle(request):
+    clock = ClockState.load()
+    clock.enabled = not clock.enabled
+    clock.last_wanted, clock.failed_at = None, None  # the next pass records the current state
+    clock.save()
+    if clock.enabled:
+        messages.success(request, "Horloge activée : elle agira au prochain changement prévu.")
+    else:
+        messages.success(request, "Horloge désactivée : le chauffage n'est plus commandé par l'horloge.")
+    return redirect("control")
+
+
+@require_POST
+def slot_add(request):
+    form = ScheduleSlotForm(request.POST)
+    if not form.is_valid():
+        return control_page(request, slot_form=form)
+    messages.success(request, f"Plage ajoutée : {form.save()}")
+    return redirect("control")
+
+
+@require_POST
+def slot_delete(request, pk):
+    slot = get_object_or_404(ScheduleSlot, pk=pk)
+    slot.delete()
+    messages.success(request, f"Plage supprimée : {slot}")
+    return redirect("control")
+
+
+@require_POST
+def day_off_add(request):
+    form = DayOffForm(request.POST)
+    if not form.is_valid():
+        return control_page(request, day_off_form=form)
+    messages.success(request, f"Congé ajouté : {form.save()}")
+    return redirect("control")
+
+
+@require_POST
+def day_off_delete(request, pk):
+    day_off = get_object_or_404(DayOff, pk=pk)
+    day_off.delete()
+    messages.success(request, f"Congé supprimé : {day_off}")
+    return redirect("control")
 
 
 def parameter_info(request, code):

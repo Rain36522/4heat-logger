@@ -5,7 +5,7 @@ Run with:  python manage.py test monitor
 """
 
 import tempfile
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from io import StringIO
 from pathlib import Path
 from unittest import mock
@@ -16,8 +16,19 @@ from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
+from monitor.core import control
 from monitor.forms import SettingChangeForm
-from monitor.models import AlertState, CodeLabel, Parameter, SettingChange
+from monitor.heating import enqueue, run_clock, run_next
+from monitor.models import (
+    AlertState,
+    ClockState,
+    CodeLabel,
+    CommandLog,
+    DayOff,
+    Parameter,
+    ScheduleSlot,
+    SettingChange,
+)
 
 from .helpers import START, write_csv
 from .test_core_excel_import import build_workbook
@@ -177,7 +188,7 @@ class ViewTests(TestCase):
 
     def test_pages_require_a_login(self):
         for name in ("status", "timeline", "startups", "compare_days", "faults", "journal", "parameters", "boiler_cycle",
-                     "timeline_export", "parameters_export", "changes_export"):
+                     "timeline_export", "parameters_export", "changes_export", "control"):
             response = self.client.get(reverse(name))
             self.assertEqual(response.status_code, 302, name)
             self.assertIn(reverse("login"), response["Location"])
@@ -185,7 +196,8 @@ class ViewTests(TestCase):
     def test_all_pages_render_when_logged_in(self):
         self.client.force_login(self.user)
         day = START.date().isoformat()
-        for name in ("status", "timeline", "startups", "compare_days", "faults", "journal", "parameters", "boiler_cycle"):
+        for name in ("status", "timeline", "startups", "compare_days", "faults", "journal", "parameters", "boiler_cycle",
+                     "control"):
             response = self.client.get(reverse(name), {"from": day, "to": day})
             self.assertEqual(response.status_code, 200, name)
             # A template comment that leaks into the page (e.g. a multi-line {# #}).
@@ -293,6 +305,220 @@ class ViewTests(TestCase):
         response = self.client.get(reverse("plotly_js"))
         self.assertEqual(response.status_code, 200)
         self.assertIn("javascript", response["Content-Type"])
+
+
+def pending():
+    commands = CommandLog.objects.filter(status=CommandLog.Status.PENDING).order_by("timestamp", "id")
+    return list(commands.values_list("source", "action", "value"))
+
+
+class ControlPageAndBotTests(TestCase):
+    """The page and the bot only queue commands: nothing talks to the module here."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = get_user_model().objects.create_user("rain", password="secret-pass-123")
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def test_buttons_queue_on_and_off_and_the_last_one_wins(self):
+        self.assertRedirects(self.client.post(reverse("control_on")), reverse("control"))
+        self.client.post(reverse("control_off"))
+        self.assertEqual(pending(), [("web", "off", None)])
+        self.assertEqual(CommandLog.objects.filter(status=CommandLog.Status.CANCELLED).count(), 1)
+        self.assertEqual(self.client.get(reverse("control_on")).status_code, 405)  # never on a simple GET
+        self.assertContains(self.client.get(reverse("control")), 'data-pending="1"')
+
+    def test_boiler_target_form(self):
+        self.client.post(reverse("control_target"), {"value": "70"})
+        self.assertEqual(pending(), [("web", "target", 70)])
+        response = self.client.post(reverse("control_target"), {"value": "abc"})
+        self.assertEqual(response.status_code, 200)  # page shown again with the error
+        self.assertEqual(len(pending()), 1)
+
+    def test_slots_and_days_off_are_added_and_deleted(self):
+        self.client.post(reverse("slot_add"), {"start_day": "0", "start_time": "05:00", "end_day": "4", "end_time": "19:00"})
+        self.client.post(reverse("slot_add"), {"start_day": "", "start_time": "06:00", "end_day": "3", "end_time": "21:00"})
+        self.assertEqual([str(s) for s in ScheduleSlot.objects.all()],
+                         ["tous les jours 06:00 → 21:00", "lundi 05:00 → vendredi 19:00"])
+        response = self.client.post(reverse("slot_add"), {"start_day": "0", "start_time": "05:00", "end_day": "", "end_time": "19:00"})
+        self.assertContains(response, "Choisis le jour de fin")
+
+        self.client.post(reverse("day_off_add"), {"first_day": "2026-12-25", "last_day": "", "label": "Noël"})
+        day_off = DayOff.objects.get()
+        self.assertEqual((day_off.first_day, day_off.last_day), (date(2026, 12, 25), date(2026, 12, 25)))
+        response = self.client.post(reverse("day_off_add"), {"first_day": "2026-12-25", "last_day": "2026-12-20"})
+        self.assertContains(response, "La fin est avant le début")
+
+        self.client.post(reverse("slot_delete", args=[ScheduleSlot.objects.first().pk]))
+        self.client.post(reverse("day_off_delete", args=[day_off.pk]))
+        self.assertEqual((ScheduleSlot.objects.count(), DayOff.objects.count()), (1, 0))
+
+    def test_bot_commands(self):
+        from monitor.management.commands.run_alerts import reply
+
+        self.assertIn("commande reçue", reply("marche", []))
+        reply("consigne", ["68"])
+        self.assertIn("par exemple", reply("consigne", ["chaud"]))
+        self.assertIn("/marche", reply("aide", []))
+        self.assertEqual(pending(), [("telegram", "on", None), ("telegram", "target", 68)])
+        self.assertEqual(reply("horloge", []), "Horloge désactivée.")
+
+
+class FakeHeating:
+    """Stands for HeatingControl: fails `failures` times, then works."""
+
+    def __init__(self, failures=0):
+        self.failures = failures
+        self.calls = []
+
+    def turn_on(self):
+        return self._go("on", "Marche envoyée au chauffage.")
+
+    def turn_off(self):
+        return self._go("off", "Arrêt envoyé au chauffage.")
+
+    def set_boiler_target(self, value):
+        if value > 75:
+            raise control.Refused("Consigne refusée")
+        return self._go("target", f"Consigne chaudière : 65 → {value} °C.")
+
+    def _go(self, action, text):
+        self.calls.append(action)
+        if self.failures:
+            self.failures -= 1
+            raise control.TryAgain("Module injoignable")
+        return text
+
+
+class QueueTests(TestCase):
+    def setUp(self):
+        patcher = mock.patch("monitor.heating.notify")
+        self.notify = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def attempt(self, heating, now=None, last_reading=None):
+        return run_next(now or datetime.now(), last_reading, heating)
+
+    def test_a_command_is_sent_and_the_bot_gets_the_result(self):
+        command = enqueue(CommandLog.Action.ON, CommandLog.Source.TELEGRAM)
+        self.attempt(FakeHeating())
+        command.refresh_from_db()
+        self.assertEqual((command.status, command.attempts), (CommandLog.Status.DONE, 1))
+        self.notify.assert_called_once_with("Marche : Marche envoyée au chauffage.")
+
+    def test_a_failed_attempt_is_retried_20_s_later(self):
+        command = enqueue(CommandLog.Action.OFF, CommandLog.Source.WEB)
+        heating = FakeHeating(failures=1)
+        self.attempt(heating)
+        command.refresh_from_db()
+        self.assertEqual((command.status, command.attempts), (CommandLog.Status.PENDING, 1))
+        self.assertAlmostEqual((command.next_try_at - datetime.now()).total_seconds(), 20, delta=2)
+
+        self.assertIsNone(self.attempt(heating))  # not due yet
+        self.attempt(heating, now=command.next_try_at)
+        command.refresh_from_db()
+        self.assertEqual((command.status, command.attempts), (CommandLog.Status.DONE, 2))
+        self.notify.assert_not_called()  # web commands are followed on the page
+
+    def test_gives_up_after_5_minutes(self):
+        command = enqueue(CommandLog.Action.ON, CommandLog.Source.TELEGRAM)
+        CommandLog.objects.filter(pk=command.pk).update(timestamp=datetime.now() - timedelta(minutes=5))
+        self.attempt(FakeHeating(failures=1))
+        command.refresh_from_db()
+        self.assertEqual(command.status, CommandLog.Status.FAILED)
+        self.assertIn("Abandon après 1 essais", command.detail)
+        self.assertIn("ÉCHEC", self.notify.call_args.args[0])
+
+    def test_a_refused_target_is_not_retried(self):
+        command = enqueue(CommandLog.Action.TARGET, CommandLog.Source.WEB, 80)
+        self.attempt(FakeHeating())
+        command.refresh_from_db()
+        self.assertEqual((command.status, command.next_try_at), (CommandLog.Status.FAILED, None))
+
+    def test_waits_for_a_quiet_moment_between_two_collector_reads(self):
+        enqueue(CommandLog.Action.ON, CommandLog.Source.WEB)
+        heating, now = FakeHeating(), datetime.now()
+        self.assertIsNone(self.attempt(heating, now, last_reading=now - timedelta(seconds=3)))
+        self.assertEqual(heating.calls, [])
+        self.attempt(heating, now, last_reading=now - timedelta(seconds=15))
+        self.assertEqual(heating.calls, ["on"])
+
+    def test_commands_go_one_at_a_time_oldest_first(self):
+        enqueue(CommandLog.Action.TARGET, CommandLog.Source.WEB, 70)
+        enqueue(CommandLog.Action.ON, CommandLog.Source.WEB)
+        heating = FakeHeating()
+        self.attempt(heating)
+        self.assertEqual(heating.calls, ["target"])
+        self.attempt(heating)
+        self.assertEqual(heating.calls, ["target", "on"])
+
+
+class ClockTests(TestCase):
+    def setUp(self):
+        ScheduleSlot.objects.create(start_day=0, start_time=time(5, 0), end_day=4, end_time=time(19, 0))
+        self.told = []
+
+    def clock(self, when):
+        return run_clock(when, tell=self.told.append)
+
+    def queued(self):
+        return [action for _, action, _ in pending()]
+
+    def finish(self, status):
+        """What the pilot would do with the clock's command."""
+        CommandLog.objects.filter(status=CommandLog.Status.PENDING).update(status=status, detail="résultat")
+
+    def enable(self):
+        ClockState.objects.update_or_create(pk=1, defaults={"enabled": True})
+
+    def test_disabled_clock_does_nothing(self):
+        self.clock(datetime(2026, 11, 16, 6))
+        self.assertEqual(CommandLog.objects.count(), 0)
+
+    def test_clock_acts_only_on_changes(self):
+        self.enable()
+        self.clock(datetime(2026, 11, 16, 4))  # first pass: only records "off"
+        self.clock(datetime(2026, 11, 16, 4, 30))
+        self.assertEqual(self.queued(), [])
+        self.clock(datetime(2026, 11, 16, 5))
+        self.assertEqual(self.queued(), ["on"])
+        self.clock(datetime(2026, 11, 16, 5, 1))  # still waiting for the pilot: nothing more
+        self.finish(CommandLog.Status.DONE)
+        self.clock(datetime(2026, 11, 18, 12))  # inside the slot: nothing new
+        self.assertEqual(self.queued(), [])
+        self.clock(datetime(2026, 11, 20, 19))
+        self.assertEqual(self.queued(), ["off"])
+        self.assertEqual(self.told, ["Horloge : marche. résultat"])
+
+    def test_a_day_off_switches_off_and_back_on(self):
+        self.enable()
+        DayOff.objects.create(first_day=date(2026, 11, 18), last_day=date(2026, 11, 18), label="congé")
+        self.clock(datetime(2026, 11, 17, 12))
+        self.clock(datetime(2026, 11, 18, 0))
+        self.assertEqual(self.queued(), ["off"])
+        self.finish(CommandLog.Status.DONE)
+        self.clock(datetime(2026, 11, 19, 0))
+        self.assertEqual(self.queued(), ["on"])
+
+    def test_a_failed_change_is_queued_again_after_5_min_and_reported_once(self):
+        self.enable()
+        self.clock(datetime(2026, 11, 16, 4))
+        self.clock(datetime(2026, 11, 16, 5))
+        self.finish(CommandLog.Status.FAILED)
+        self.clock(datetime(2026, 11, 16, 5, 6))  # sees the failure, waits 5 min
+        self.assertEqual(self.queued(), [])
+        self.clock(datetime(2026, 11, 16, 5, 11))
+        self.assertEqual(self.queued(), ["on"])
+        self.finish(CommandLog.Status.FAILED)
+        self.clock(datetime(2026, 11, 16, 5, 17))
+        self.assertEqual(len(self.told), 1)  # second failure: no new message
+        self.clock(datetime(2026, 11, 16, 5, 23))
+        self.finish(CommandLog.Status.DONE)
+        self.clock(datetime(2026, 11, 16, 5, 24))
+        self.assertTrue(ClockState.load().last_wanted)
+        self.assertIsNone(ClockState.load().failed_at)
 
 
 class MigrationTests(TestCase):

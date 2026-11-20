@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta
 
-from monitor.core.alerts import AlertState, format_duration, format_status, is_status_command, process_readings
+from monitor.core.alerts import AlertState, format_duration, format_status, parse_command, process_readings
 from monitor.tests.helpers import START, make_frame
 
 
@@ -94,15 +94,16 @@ class StatusCommandTests(unittest.TestCase):
     def test_status_without_data(self):
         self.assertEqual(format_status(make_frame([]), START), "Aucune mesure disponible.")
 
-    def test_only_status_from_the_configured_chat_is_accepted(self):
+    def test_only_commands_from_the_configured_chat_are_accepted(self):
         def update(text, chat=42):
             return {"update_id": 1, "message": {"chat": {"id": chat}, "text": text}}
 
-        self.assertTrue(is_status_command(update("/status"), "42"))
-        self.assertTrue(is_status_command(update("/status@MonBot"), "42"))
-        self.assertFalse(is_status_command(update("/status", chat=7), "42"))
-        self.assertFalse(is_status_command(update("bonjour"), "42"))
-        self.assertFalse(is_status_command({"update_id": 2}, "42"))
+        self.assertEqual(parse_command(update("/status"), "42"), ("status", []))
+        self.assertEqual(parse_command(update("/Status@MonBot"), "42"), ("status", []))
+        self.assertEqual(parse_command(update("/consigne 70"), "42"), ("consigne", ["70"]))
+        self.assertIsNone(parse_command(update("/arret", chat=7), "42"))
+        self.assertIsNone(parse_command(update("bonjour"), "42"))
+        self.assertIsNone(parse_command({"update_id": 2}, "42"))
 
 
 class FormatDurationTests(unittest.TestCase):

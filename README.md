@@ -7,7 +7,8 @@ Application Django pour affiner la régulation du chauffage :
 - **Démarrages** : tous les démarrages superposés et alignés sur leur début, pour voir l'effet d'un réglage d'un démarrage à l'autre.
 - **Défauts** : épisodes par code, durée médiane, délai après le démarrage.
 - **Réglages** : saisie d'un changement (utilisable au téléphone devant le chauffage), horodaté, avec l'ancienne valeur retrouvée automatiquement.
-- **Alertes Telegram** : message quand un défaut (code ≠ 0) est confirmé sur 2 mesures consécutives, et quand il disparaît.
+- **Pilotage** : marche / arrêt, consigne chaudière, horloge hebdomadaire avec jours fériés et congés, historique des commandes.
+- **Alertes Telegram** : message quand un défaut (code ≠ 0) est confirmé sur 2 mesures consécutives, et quand il disparaît ; commandes `/status`, `/marche`, `/arret`, `/consigne`, `/horloge`.
 
 Le **collecteur** (`fourheat_logger/`, service `collector`) interroge le module 4HEAT et ajoute une ligne à `4heat_log.csv`.
 L'app et les alertes lisent ce CSV en lecture seule. Le journal des réglages (≈ 289 paramètres) est dans une base SQLite.
@@ -24,7 +25,8 @@ Ouvre `http://IP-DE-LA-VM:8000` (port modifiable avec `WEB_PORT`).
 
 ### Collecteur
 
-Le service `collector` démarre avec le reste. Il n'envoie au module que la requête de lecture `["SEL","0"]`.
+Le service `collector` démarre avec le reste. Il n'envoie au module que la requête de lecture `["SEL","0"]`
+(les commandes de la page Pilotage, du bot et de l'horloge passent par le service `pilote`).
 Module joignable : une ligne toutes les 60 s ; injoignable : test toutes les 2 min, rien n'est écrit.
 
 ```bash
@@ -67,13 +69,57 @@ Ensuite, dans l'admin (`/admin/`) : ajoute les **libellés de codes** (nom des �
 Test : `docker compose run --rm telegram-com python manage.py run_alerts --once`.
 Si Telegram est injoignable, l'état n'est pas enregistré : le message est renvoyé au passage suivant.
 
-Commande **/status** : le bot répond avec la dernière mesure (heure, état, défaut, températures, O₂).
-Seul le chat `TELEGRAM_CHAT_ID` reçoit une réponse ; les commandes envoyées pendant que le service était arrêté sont ignorées.
-Optionnel : dans @BotFather, `/setcommands` → `status - Dernière mesure` pour l'avoir dans le menu.
+Commandes du bot :
+
+| Commande | Effet |
+|---|---|
+| `/status` | dernière mesure (heure, état, défaut, températures, O₂) |
+| `/marche`, `/arret` | allume / éteint le chauffage |
+| `/consigne 70` | consigne chaudière en °C |
+| `/horloge` | horloge active ou non, prochain changement prévu |
+
+Seul le chat `TELEGRAM_CHAT_ID` reçoit une réponse ; les commandes envoyées pendant que le service était arrêté sont ignorées
+(un vieux `/arret` ne doit pas éteindre le chauffage des heures plus tard).
+Optionnel : dans @BotFather, `/setcommands` puis colle :
+
+```
+status - Dernière mesure
+marche - Allumer le chauffage
+arret - Éteindre le chauffage
+consigne - Consigne chaudière, ex. /consigne 70
+horloge - État de l'horloge
+```
+
+### Pilotage et horloge
+
+Page **Pilotage** : boutons Marche / Arrêt, consigne chaudière, plages horaires, jours fériés et congés, 15 dernières commandes
+(toutes : admin → « Commandes »).
+
+**File de commandes** : la page, le bot et l'horloge ne parlent jamais au module, ils déposent la commande dans la base.
+Le service `pilote` (seul à envoyer des commandes au module `FOURHEAT_HOST`, avec le collecteur qui lit) les envoie une à une :
+
+- plus ancienne d'abord, en démarrant 10 à 35 s après la dernière lecture du collecteur (qui lit toutes les 60 s), pour ne jamais interroger le module en même temps ;
+- en cas d'échec, nouvel essai toutes les **20 s** ; abandon au bout de **5 min** ;
+- une commande en attente est remplacée par une plus récente du même type (Marche puis Arrêt : seul l'arrêt part) ;
+- au moins 10 s entre deux commandes, 5 s entre deux connexions d'une même commande ;
+- résultat sur la page (le tableau se met à jour seul) ; pour Telegram, un second message avec le résultat.
+
+Trames envoyées (reprises de [ha-redpod-4heat](https://github.com/xcrittpm/ha-redpod-4heat) et [4heat-esphome](https://github.com/leoshusar/4heat-esphome)) :
+marche `["SEC","1","J30253000000000001"]`, arrêt `["SEC","1","J30254000000000001"]`,
+consigne `["SEC","1","B20180000000000070"]` (20180 est annoncé « B », modifiable, par ce module).
+Avant d'écrire la consigne, ses limites sont relues sur le module (B20005 / B20006, 30–75 °C), puis la valeur est relue 10 s après pour confirmation.
+
+**Horloge** (dans le service `pilote`, vérifie toutes les 5 s) :
+
+- une plage va d'un jour + heure à un autre, chaque semaine (ex. lundi 05:00 → vendredi 19:00), ou « tous les jours » (ex. 06:00 → 21:00, peut passer minuit) ;
+- un jour férié ou de congé arrête le chauffage toute la journée, même au milieu d'une plage ;
+- l'horloge n'agit qu'aux changements (début / fin de plage, début / fin de congé) : une commande manuelle reste valable jusqu'au prochain changement ;
+- juste après l'activation, elle ne fait rien : elle agira au prochain changement prévu (mets le chauffage dans le bon état avec les boutons si besoin) ;
+- si la commande échoue (5 min d'essais), elle est remise en file 5 min plus tard, jusqu'à réussir ; un seul message Telegram (si le bot est configuré).
 
 ## Sécurité
 
-- Compte obligatoire sur toutes les pages (et l'app peut **écrire** le journal) : n'expose pas le port sur Internet. Accès externe via VPN (WireGuard / Tailscale), pas de redirection de port.
+- Compte obligatoire sur toutes les pages (et l'app peut **écrire** le journal et **commander le chauffage**) : n'expose pas le port sur Internet. Accès externe via VPN (WireGuard / Tailscale), pas de redirection de port.
 - Derrière un reverse proxy en https : renseigne `CSRF_TRUSTED_ORIGINS` (ex. `https://chauffage.example`) et restreins `ALLOWED_HOSTS`.
 
 ## Sauvegarde
@@ -109,10 +155,12 @@ Si `MigrationTests` échoue après une modification de `models.py` : `python man
 | `fourheat_logger/` | collecteur : lecture du module 4HEAT, écriture du CSV (copie de `../fourheat_logger`, plus un correctif dans `storage.py` : une ligne n'est plus collée à une dernière ligne sans retour à la ligne) |
 | `monitor/core/readings.py` | lecture du CSV, démarrages, épisodes de défauts |
 | `monitor/core/alerts.py` | logique d'alerte + envoi Telegram |
+| `monitor/core/control.py` | commandes au module (avec vérifications), calcul de l'horloge, délais de la file |
+| `monitor/heating.py` | file de commandes (mise en file, essai, résultat) et horloge |
 | `monitor/core/charts.py` | construction des graphes (Plotly.js) |
 | `monitor/core/excel_import.py` | lecture du classeur Excel |
 | `monitor/core/journal.py` | valeur en vigueur / valeur précédente d'un paramètre |
 | `monitor/models.py`, `forms.py`, `admin.py` | journal, saisie, administration |
 | `monitor/views.py`, `urls.py`, `templates/` | pages |
-| `monitor/management/commands/` | `import_excel`, `run_alerts` |
+| `monitor/management/commands/` | `import_excel`, `run_alerts` (bot), `run_pilot` (file de commandes + horloge) |
 | `config/settings.py` | réglages, pilotés par variables d'environnement |

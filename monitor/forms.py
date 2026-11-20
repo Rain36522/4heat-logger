@@ -1,7 +1,10 @@
 from django import forms
 
 from .core.journal import format_value
-from .models import Parameter, SettingChange, now_local
+from .models import DAY_CHOICES, DayOff, Parameter, ScheduleSlot, SettingChange, now_local
+
+EVERY_DAY = ""
+SLOT_DAY_CHOICES = [(EVERY_DAY, "Tous les jours"), *DAY_CHOICES]
 
 INPUT_FORMATS = [
     "%Y-%m-%dT%H:%M",  # <input type="datetime-local">
@@ -56,3 +59,61 @@ class SettingChangeForm(forms.Form):
             new_value=data["new_value"],
             comment=data["comment"],
         )
+
+
+class BoilerTargetForm(forms.Form):
+    # Rough bounds only: the real limits are read from the module before writing.
+    value = forms.IntegerField(label="Consigne chaudière (°C)", min_value=20, max_value=90)
+
+
+class ScheduleSlotForm(forms.ModelForm):
+    """Start day "Tous les jours" = a daily slot (the end day is then ignored)."""
+
+    start_day = forms.TypedChoiceField(
+        label="Début", choices=SLOT_DAY_CHOICES, coerce=int, empty_value=None, required=False
+    )
+    end_day = forms.TypedChoiceField(
+        label="Fin", choices=SLOT_DAY_CHOICES, coerce=int, empty_value=None, required=False
+    )
+
+    class Meta:
+        model = ScheduleSlot
+        fields = ["start_day", "start_time", "end_day", "end_time"]
+        widgets = {
+            "start_time": forms.TimeInput(attrs={"type": "time"}, format="%H:%M"),
+            "end_time": forms.TimeInput(attrs={"type": "time"}, format="%H:%M"),
+        }
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("start_day") is None:
+            cleaned["end_day"] = None
+        elif cleaned.get("end_day") is None:
+            self.add_error("end_day", "Choisis le jour de fin (ou « Tous les jours » au début).")
+        return cleaned
+
+
+class DayOffForm(forms.ModelForm):
+    """A single day when "au" is left empty."""
+
+    class Meta:
+        model = DayOff
+        fields = ["first_day", "last_day", "label"]
+        widgets = {
+            "first_day": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+            "last_day": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+            "label": forms.TextInput(attrs={"placeholder": "ex. Noël, vacances"}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["last_day"].required = False
+
+    def clean(self):
+        cleaned = super().clean()
+        first, last = cleaned.get("first_day"), cleaned.get("last_day")
+        if first and not last:
+            cleaned["last_day"] = first
+        elif first and last and last < first:
+            self.add_error("last_day", "La fin est avant le début.")
+        return cleaned

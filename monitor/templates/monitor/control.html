@@ -1,0 +1,184 @@
+{% extends "monitor/base.html" %}
+{% block title %}Pilotage – Chauffage{% endblock %}
+{% block content %}
+<h1>Pilotage</h1>
+
+<h2>Commande</h2>
+<div class="card">
+  {% if current %}
+    <p style="margin:0 0 12px">
+      État actuel : <strong>{{ current.state|default_if_none:"–" }}</strong>{% if current.state_name %} ({{ current.state_name }}){% endif %}
+      · consigne {{ current.target }} °C
+      <span class="muted">(dernière mesure il y a {{ current.age_text }})</span>
+    </p>
+  {% endif %}
+  <div class="actions">
+    <form method="post" action="{% url 'control_on' %}">{% csrf_token %}
+      <button class="primary" type="submit">Marche</button>
+    </form>
+    <form method="post" action="{% url 'control_off' %}" onsubmit="return confirm('Éteindre le chauffage ?')">{% csrf_token %}
+      <button class="secondary" type="submit">Arrêt</button>
+    </form>
+  </div>
+  <form method="post" action="{% url 'control_target' %}" class="filters" style="margin:0">
+    {% csrf_token %}
+    <div>
+      <label for="{{ target_form.value.id_for_label }}">{{ target_form.value.label }}</label>
+      {{ target_form.value }}
+      {{ target_form.value.errors }}
+    </div>
+    <button class="secondary" type="submit">Envoyer</button>
+  </form>
+  <p class="muted" style="margin:8px 0 0">
+    Les limites sont relues sur le module avant l'envoi (normalement {{ target_range.0 }}–{{ target_range.1 }} °C),
+    puis la nouvelle valeur est relue pour confirmation. L'arrêt passe par l'extinction ; pendant l'allumage, la chaudière peut l'ignorer.
+  </p>
+</div>
+
+<h2>Horloge</h2>
+<div class="card">
+  <div class="actions" style="justify-content:space-between">
+    <div class="badge">
+      <span class="dot {% if clock.enabled %}good{% else %}idle{% endif %}"></span>
+      {% if clock.enabled %}Horloge active{% else %}Horloge désactivée{% endif %}
+    </div>
+    <form method="post" action="{% url 'clock_toggle' %}">{% csrf_token %}
+      <button class="secondary" type="submit">{% if clock.enabled %}Désactiver{% else %}Activer{% endif %}</button>
+    </form>
+  </div>
+  {% if slots %}
+    <p style="margin:0">
+      Selon les plages : <strong>{% if wanted_now %}marche{% else %}arrêt{% endif %}</strong> en ce moment.
+      Prochain changement : {{ next_change }}.
+    </p>
+  {% endif %}
+  <p class="muted" style="margin:8px 0 0">
+    L'horloge n'agit qu'au début et à la fin des plages et des congés : une commande manuelle reste valable jusqu'au prochain changement.
+  </p>
+</div>
+
+<h3>Plages horaires</h3>
+<div class="table-wrap card" style="padding:0">
+  <table>
+    <thead><tr><th>Plage</th><th></th></tr></thead>
+    <tbody>
+      {% for slot in slots %}
+        <tr>
+          <td>{{ slot }}</td>
+          <td style="text-align:right">
+            <form method="post" action="{% url 'slot_delete' slot.pk %}">{% csrf_token %}
+              <button class="secondary" type="submit" aria-label="Supprimer la plage {{ slot }}">Supprimer</button>
+            </form>
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="2" class="muted">Aucune plage : ajoute-en une ci-dessous.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<form method="post" action="{% url 'slot_add' %}" class="card filters" style="margin-top:8px">
+  {% csrf_token %}
+  {{ slot_form.non_field_errors }}
+  <div>
+    <label for="{{ slot_form.start_day.id_for_label }}">Début</label>
+    {{ slot_form.start_day }} {{ slot_form.start_time }}
+    {{ slot_form.start_day.errors }}{{ slot_form.start_time.errors }}
+  </div>
+  <div>
+    <label for="{{ slot_form.end_day.id_for_label }}">Fin</label>
+    {{ slot_form.end_day }} {{ slot_form.end_time }}
+    {{ slot_form.end_day.errors }}{{ slot_form.end_time.errors }}
+  </div>
+  <button class="primary" type="submit">Ajouter la plage</button>
+</form>
+<p class="muted">Ex. lundi 05:00 → vendredi 19:00, ou « Tous les jours » 06:00 → 21:00 (le jour de fin est alors ignoré).</p>
+
+<h3>Jours fériés et congés</h3>
+<div class="table-wrap card" style="padding:0">
+  <table>
+    <thead><tr><th>Période</th><th>Motif</th><th></th></tr></thead>
+    <tbody>
+      {% for day_off in days_off %}
+        <tr>
+          <td>{{ day_off.first_day|date:"D d.m.Y" }}{% if day_off.last_day != day_off.first_day %} → {{ day_off.last_day|date:"D d.m.Y" }}{% endif %}</td>
+          <td>{{ day_off.label }}</td>
+          <td style="text-align:right">
+            <form method="post" action="{% url 'day_off_delete' day_off.pk %}">{% csrf_token %}
+              <button class="secondary" type="submit" aria-label="Supprimer le congé {{ day_off }}">Supprimer</button>
+            </form>
+          </td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="3" class="muted">Aucun congé à venir.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<form method="post" action="{% url 'day_off_add' %}" class="card filters" style="margin-top:8px">
+  {% csrf_token %}
+  {{ day_off_form.non_field_errors }}
+  <div>
+    <label for="{{ day_off_form.first_day.id_for_label }}">Du</label>
+    {{ day_off_form.first_day }}{{ day_off_form.first_day.errors }}
+  </div>
+  <div>
+    <label for="{{ day_off_form.last_day.id_for_label }}">Au (vide = un seul jour)</label>
+    {{ day_off_form.last_day }}{{ day_off_form.last_day.errors }}
+  </div>
+  <div>
+    <label for="{{ day_off_form.label.id_for_label }}">Motif</label>
+    {{ day_off_form.label }}{{ day_off_form.label.errors }}
+  </div>
+  <button class="primary" type="submit">Ajouter</button>
+</form>
+<p class="muted">Pendant un congé, le chauffage est arrêté toute la journée, même au milieu d'une plage.</p>
+
+<h2>Dernières commandes</h2>
+<div class="table-wrap card" style="padding:0" data-live="commands" data-pending="{% if has_pending %}1{% endif %}">
+  <table>
+    <thead><tr><th>Demandée</th><th>Origine</th><th>Commande</th><th>Statut</th><th>Détail</th></tr></thead>
+    <tbody>
+      {% for command in commands %}
+        <tr>
+          <td>{{ command.timestamp|date:"d.m H:i:s" }}</td>
+          <td>{{ command.get_source_display }}</td>
+          <td>{{ command.describe }}</td>
+          <td>
+            {% if command.status == "failed" %}<span class="tag">{{ command.get_status_display }}</span>
+            {% else %}{{ command.get_status_display }}{% endif %}
+            {% if command.attempts > 1 %}<span class="muted">({{ command.attempts }} essais)</span>{% endif %}
+          </td>
+          <td>{{ command.detail }}{% if command.status == "pending" and command.attempts %} <span class="muted">· nouvel essai à {{ command.next_try_at|time:"H:i:s" }}</span>{% endif %}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" class="muted">Aucune commande envoyée.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="muted">
+  Les commandes partent une à une, entre deux lectures du collecteur. En cas d'échec, nouvel essai toutes les 20 s pendant 5 min.
+  Une commande en attente est remplacée par une plus récente du même type (ex. Marche puis Arrêt : seul l'arrêt part).
+</p>
+
+<script>
+  // While a command waits, refresh only the command table every 5 s (forms keep what is typed).
+  (function () {
+    function block(doc) { return doc.querySelector('[data-live="commands"]'); }
+    if (!block(document).dataset.pending) { return; }
+    var timer = setInterval(async function () {
+      try {
+        var response = await fetch(location.href, { cache: "no-store" });
+        if (!response.ok) { return; }
+        var fresh = block(new DOMParser().parseFromString(await response.text(), "text/html"));
+        if (!fresh) { clearInterval(timer); return; }  // session expired: leave the page as it is
+        block(document).innerHTML = fresh.innerHTML;
+        if (!fresh.dataset.pending) { clearInterval(timer); }
+      } catch (error) {
+        // Network hiccup: try again on the next tick.
+      }
+    }, 5000);
+  })();
+</script>
+{% endblock %}

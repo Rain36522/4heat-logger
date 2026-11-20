@@ -190,13 +190,19 @@ def format_status(
     return "\n".join(lines)
 
 
-def is_status_command(update: dict, chat_id: str) -> bool:
-    """True for a /status (or /status@BotName) message coming from the configured chat only."""
+def parse_command(update: dict, chat_id: str) -> tuple[str, list[str]] | None:
+    """("consigne", ["70"]) for "/consigne 70" (or "/consigne@BotName 70").
+
+    None for anything that is not a command, and for every message that does not come
+    from the configured chat: nobody else may read or drive the heating.
+    """
     message = update.get("message") or {}
     if str(message.get("chat", {}).get("id")) != str(chat_id):
-        return False
+        return None
     words = (message.get("text") or "").split()
-    return bool(words) and words[0].split("@")[0].lower() == "/status"
+    if not words or not words[0].startswith("/"):
+        return None
+    return words[0][1:].split("@")[0].lower(), words[1:]
 
 
 def get_telegram_updates(token: str, offset: int | None = None, wait: float = 0) -> list[dict]:

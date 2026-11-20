@@ -1,9 +1,9 @@
-"""Network access to the 4HEAT module: presence test and read-only query."""
+"""Network access to the 4HEAT module: presence test, read query and write commands."""
 
 import socket
 
 from .config import READ_ALL_QUERY
-from .protocol import parse_values
+from .protocol import build_command, parse_values
 
 
 class ModuleError(Exception):
@@ -28,7 +28,7 @@ class FourHeatClient:
     def read_values(self) -> dict[str, int]:
         """Send the read-all query and return {id: value}. Raise ModuleError on failure."""
         try:
-            raw = self._query()
+            raw = self._query(READ_ALL_QUERY)
         except OSError as error:
             raise ModuleError(f"connection failed: {error}") from error
 
@@ -37,10 +37,31 @@ class FourHeatClient:
             raise ModuleError(f"no values in answer: {raw!r}")
         return values
 
-    def _query(self) -> str:
+    def send_command(self, *items: str) -> str:
+        """Send a write frame (items from protocol.command_item) and return the raw answer.
+
+        The exact acknowledgement format is not documented: the answer must not be an error
+        and must mention the id of every item sent, otherwise ModuleError is raised (the
+        command may still have been applied, so callers check the result when they can).
+        """
+        try:
+            raw = self._query(build_command(*items))
+        except OSError as error:
+            raise ModuleError(f"connection failed: {error}") from error
+
+        if not raw.strip():
+            raise ModuleError("no answer")
+        if '"ERR"' in raw:
+            raise ModuleError(f"command refused: {raw!r}")
+        missing = [item for item in items if item[1:6] not in raw]
+        if missing:
+            raise ModuleError(f"command not acknowledged: {raw!r}")
+        return raw
+
+    def _query(self, message: bytes) -> str:
         with socket.create_connection((self._host, self._port), timeout=self._read_timeout) as sock:
             sock.settimeout(self._read_timeout)
-            sock.sendall(READ_ALL_QUERY)
+            sock.sendall(message)
 
             chunks = []
             while True:
